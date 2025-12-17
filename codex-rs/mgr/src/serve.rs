@@ -11,9 +11,11 @@ use axum::response::Response;
 use axum::routing::get;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
+use crate::account_token_provider;
 use crate::config;
 use crate::gateway_sessions;
 use crate::proxy;
@@ -27,9 +29,11 @@ struct ServeState {
     http: reqwest::Client,
     pools: BTreeMap<String, config::PoolConfig>,
     sticky_ttl_seconds: i64,
+    accounts_root: PathBuf,
+    token_safety_window_seconds: i64,
 }
 
-pub(crate) async fn run(state_root: &Path) -> anyhow::Result<()> {
+pub(crate) async fn run(state_root: &Path, accounts_root: &Path) -> anyhow::Result<()> {
     let config_path = config::config_path(state_root);
     let cfg = config::load(state_root)?;
 
@@ -57,6 +61,8 @@ pub(crate) async fn run(state_root: &Path) -> anyhow::Result<()> {
         http: reqwest::Client::new(),
         pools: cfg.pools.clone(),
         sticky_ttl_seconds: cfg.gateway.sticky_ttl_seconds,
+        accounts_root: accounts_root.to_path_buf(),
+        token_safety_window_seconds: cfg.gateway.token_safety_window_seconds,
     });
 
     let router = Router::new()
@@ -106,9 +112,27 @@ async fn require_gateway_session(
 
 async fn proxy_non_streaming(
     State(state): State<Arc<ServeState>>,
+    Extension(route_info): Extension<routing::RouteInfo>,
     request: Request<Body>,
 ) -> Result<Response, StatusCode> {
-    proxy::forward_non_streaming(&state.http, &state.upstream_base_url, request).await
+    let mut conn = state.redis.clone();
+    let auth = account_token_provider::get(
+        &mut conn,
+        &state.accounts_root,
+        &route_info.account_id,
+        state.token_safety_window_seconds,
+    )
+    .await
+    .map_err(map_auth_error)?;
+
+    proxy::forward_non_streaming(
+        &state.http,
+        &state.upstream_base_url,
+        request,
+        &auth.authorization,
+        auth.chatgpt_account_id.as_deref(),
+    )
+    .await
 }
 
 async fn ensure_routing(
@@ -162,6 +186,13 @@ fn map_routing_error(err: anyhow::Error) -> StatusCode {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     StatusCode::INTERNAL_SERVER_ERROR
+}
+
+fn map_auth_error(err: anyhow::Error) -> StatusCode {
+    if err.downcast_ref::<redis::RedisError>().is_some() {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    StatusCode::BAD_GATEWAY
 }
 
 async fn authz(Extension(route_info): Extension<routing::RouteInfo>) -> String {

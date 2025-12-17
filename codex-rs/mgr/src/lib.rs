@@ -1,3 +1,4 @@
+mod account_token_provider;
 mod accounts;
 pub mod app;
 mod config;

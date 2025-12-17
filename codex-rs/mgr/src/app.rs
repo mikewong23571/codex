@@ -269,6 +269,6 @@ pub async fn run() -> anyhow::Result<()> {
             )
             .await
         }
-        Commands::Serve => serve::run(&state_root).await,
+        Commands::Serve => serve::run(&state_root, &accounts_root).await,
     }
 }
