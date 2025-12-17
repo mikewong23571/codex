@@ -347,7 +347,7 @@ gateway 不做业务级异常处理，但必须返回明确 HTTP：
 ```toml
 [gateway]
 listen = "127.0.0.1:8787"
-upstream_base_url = "https://chatgpt.com/backend-api/"
+upstream_base_url = "https://chatgpt.com/backend-api/codex"
 redis_url = "redis://127.0.0.1:6379"
 sticky_ttl_seconds = 7200
 token_safety_window_seconds = 120
