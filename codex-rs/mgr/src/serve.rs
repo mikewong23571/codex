@@ -14,11 +14,14 @@ use tokio::net::TcpListener;
 
 use crate::config;
 use crate::gateway_sessions;
+use crate::proxy;
 use crate::redis_conn;
 
 #[derive(Clone)]
 struct ServeState {
     redis: redis::aio::ConnectionManager,
+    upstream_base_url: String,
+    http: reqwest::Client,
 }
 
 pub(crate) async fn run(state_root: &Path) -> anyhow::Result<()> {
@@ -45,11 +48,14 @@ pub(crate) async fn run(state_root: &Path) -> anyhow::Result<()> {
 
     let state = Arc::new(ServeState {
         redis: redis_conn::connect(&cfg.gateway.redis_url).await?,
+        upstream_base_url: cfg.gateway.upstream_base_url.clone(),
+        http: reqwest::Client::new(),
     });
 
     let router = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/authz", get(|| async { "ok\n" }))
+        .fallback(proxy_non_streaming)
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_gateway_session,
@@ -85,6 +91,13 @@ async fn require_gateway_session(
         .ok_or(StatusCode::UNAUTHORIZED)?;
     request.extensions_mut().insert(session);
     Ok(next.run(request).await)
+}
+
+async fn proxy_non_streaming(
+    State(state): State<Arc<ServeState>>,
+    request: Request<Body>,
+) -> Result<Response, StatusCode> {
+    proxy::forward_non_streaming(&state.http, &state.upstream_base_url, request).await
 }
 
 fn parse_bearer_token(value: &str) -> Option<&str> {
