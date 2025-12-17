@@ -24,6 +24,7 @@ members = [
     "linux-sandbox",
     "lmstudio",
     "login",
+    "mgr",
     "mcp-server",
     "mcp-types",
     "ollama",
