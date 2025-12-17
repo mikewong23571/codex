@@ -125,7 +125,7 @@ async fn proxy_non_streaming(
     .await
     .map_err(map_auth_error)?;
 
-    proxy::forward_non_streaming(
+    proxy::forward(
         &state.http,
         &state.upstream_base_url,
         request,

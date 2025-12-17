@@ -36,9 +36,10 @@ pub(crate) async fn get(
     let safety_ms = token_safety_window_seconds.saturating_mul(1000);
 
     if let Some(material) = get_cached(conn, account_id).await?
-        && material.expires_at_ms.saturating_sub(start_ms) > safety_ms {
-            return Ok(material);
-        }
+        && material.expires_at_ms.saturating_sub(start_ms) > safety_ms
+    {
+        return Ok(material);
+    }
 
     let lock_key = format!("{TOKEN_REFRESH_LOCK_KEY_PREFIX}{account_id}");
     let lock_value = random_value()?;
@@ -66,9 +67,10 @@ pub(crate) async fn get(
         .await;
 
         if let Some(material) = get_cached(conn, account_id).await?
-            && material.expires_at_ms.saturating_sub(now_ms()) > safety_ms {
-                return Ok(material);
-            }
+            && material.expires_at_ms.saturating_sub(now_ms()) > safety_ms
+        {
+            return Ok(material);
+        }
 
         if now_ms() >= deadline_ms {
             break;

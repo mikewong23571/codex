@@ -11,7 +11,7 @@ use crate::header_policy;
 
 const MAX_BODY_BYTES: i64 = 10 * 1024 * 1024;
 
-pub(crate) async fn forward_non_streaming(
+pub(crate) async fn forward(
     http: &reqwest::Client,
     upstream_base_url: &str,
     request: Request<Body>,
@@ -19,9 +19,7 @@ pub(crate) async fn forward_non_streaming(
     chatgpt_account_id: Option<&str>,
 ) -> Result<Response, StatusCode> {
     let (parts, body) = request.into_parts();
-    if request_accepts_event_stream(&parts.headers) {
-        return Err(StatusCode::NOT_IMPLEMENTED);
-    }
+    let wants_event_stream = request_accepts_event_stream(&parts.headers);
 
     let path_and_query = parts
         .uri
@@ -59,12 +57,17 @@ pub(crate) async fn forward_non_streaming(
 
     let status = response.status();
     let headers = header_policy::forward_response_headers(response.headers());
-    let response_body = response
-        .bytes()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let body = if wants_event_stream {
+        Body::from_stream(response.bytes_stream())
+    } else {
+        let response_body = response
+            .bytes()
+            .await
+            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        Body::from(response_body)
+    };
 
-    let mut out = Response::new(Body::from(response_body));
+    let mut out = Response::new(body);
     *out.status_mut() = status;
     out.headers_mut().extend(headers);
     Ok(out)
