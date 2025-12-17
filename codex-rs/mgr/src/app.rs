@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use crate::accounts;
 use crate::gateway;
+use crate::observability;
 use crate::pools;
 use crate::run_cmd;
 use crate::serve;
@@ -186,6 +187,7 @@ struct RunArgs {
 }
 
 pub async fn run() -> anyhow::Result<()> {
+    observability::init_tracing();
     let cli = Cli::parse();
 
     let home = dirs::home_dir().context("failed to resolve home directory")?;

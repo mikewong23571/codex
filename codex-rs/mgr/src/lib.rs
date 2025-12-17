@@ -7,6 +7,7 @@ mod gateway_sessions;
 mod header_policy;
 mod label;
 mod layout;
+mod observability;
 mod pools;
 mod proxy;
 mod redis_conn;

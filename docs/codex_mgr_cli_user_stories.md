@@ -75,6 +75,7 @@
   - 接受 `Authorization: Bearer <gateway_token>`
   - 读取 `conversation_id`（或 `session_id`）并 sticky 到某个账号
   - 将请求转发到 upstream（含 SSE 字节流透传）
+  - 提供最小运维端点：`/healthz`（存活）、`/readyz`（Redis）、`/metrics`（Prometheus）
 - 成功条件：
   - gateway 启动后输出 listen 地址、上游地址、Redis 连接信息（脱敏）
   - client 可以通过 gateway 正常完成一次 SSE 会话（DoD 见 `docs/multi_account_gateway.md`）
