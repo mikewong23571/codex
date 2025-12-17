@@ -58,6 +58,7 @@ pub(crate) async fn run(state_root: &Path, accounts_root: &Path) -> anyhow::Resu
         token_safety_window_seconds = cfg.gateway.token_safety_window_seconds,
         "gateway token safety window"
     );
+    warn_if_upstream_base_url_is_suspicious(&cfg.gateway.upstream_base_url);
 
     let listener = TcpListener::bind(&cfg.gateway.listen)
         .await
@@ -288,6 +289,16 @@ fn redact_url(url: &str) -> String {
     match userinfo.split_once(':') {
         Some((user, _password)) => format!("{}{}:****{}", &url[..scheme_end], user, rest),
         None => url.to_string(),
+    }
+}
+
+fn warn_if_upstream_base_url_is_suspicious(upstream_base_url: &str) {
+    let base = upstream_base_url.trim_end_matches('/').to_ascii_lowercase();
+    if base.ends_with("/backend-api") && !base.ends_with("/backend-api/codex") {
+        tracing::warn!(
+            upstream_base_url,
+            "upstream_base_url may be incorrect for Codex Responses; expected https://chatgpt.com/backend-api/codex so /responses maps to /backend-api/codex/responses"
+        );
     }
 }
 

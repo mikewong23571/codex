@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use toml::Value;
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
-const DEFAULT_UPSTREAM_BASE_URL: &str = "https://chatgpt.com/backend-api/";
+const DEFAULT_UPSTREAM_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const DEFAULT_REDIS_URL: &str = "redis://127.0.0.1:6379";
 const DEFAULT_STICKY_TTL_SECONDS: i64 = 7200;
 const DEFAULT_TOKEN_SAFETY_WINDOW_SECONDS: i64 = 120;
