@@ -336,7 +336,7 @@ gateway 不做业务级异常处理，但必须返回明确 HTTP：
 为避免 “CLI vs env vs 文件” 多层覆盖导致不可预期行为，v1 约定 **只允许一处可配置**（single source of truth）：
 
 - 配置文件：`$STATE_ROOT/config.toml`（默认 `~/.codex-mgr/config.toml`）
-- 不支持 env 覆盖、不支持 `serve` 的 CLI flags 覆盖（`gateway issue` 的 `--pool/--ttl` 属于一次性输入，不属于持久配置）
+- 不支持 env 覆盖、不支持 `serve` 的 CLI flags 覆盖（`gateway issue` 的 `--pool/--ttl-seconds` 属于一次性输入，不属于持久配置）
 
 唯一的定位方式：
 

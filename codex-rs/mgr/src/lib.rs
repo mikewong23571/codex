@@ -1,9 +1,12 @@
 mod accounts;
 pub mod app;
 mod config;
+mod gateway;
+mod gateway_sessions;
 mod label;
 mod layout;
 mod pools;
+mod redis_conn;
 mod run_cmd;
 mod serve;
 mod state;
