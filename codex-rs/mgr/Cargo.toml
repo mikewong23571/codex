@@ -23,7 +23,7 @@ dirs = { workspace = true }
 futures = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
