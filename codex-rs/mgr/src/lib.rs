@@ -9,6 +9,7 @@ mod layout;
 mod pools;
 mod proxy;
 mod redis_conn;
+mod routing;
 mod run_cmd;
 mod serve;
 mod state;

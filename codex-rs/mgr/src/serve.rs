@@ -1,6 +1,7 @@
 use anyhow::Context;
 use axum::Router;
 use axum::body::Body;
+use axum::extract::Extension;
 use axum::extract::State;
 use axum::http::Request;
 use axum::http::StatusCode;
@@ -8,6 +9,7 @@ use axum::middleware;
 use axum::middleware::Next;
 use axum::response::Response;
 use axum::routing::get;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -16,12 +18,15 @@ use crate::config;
 use crate::gateway_sessions;
 use crate::proxy;
 use crate::redis_conn;
+use crate::routing;
 
 #[derive(Clone)]
 struct ServeState {
     redis: redis::aio::ConnectionManager,
     upstream_base_url: String,
     http: reqwest::Client,
+    pools: BTreeMap<String, config::PoolConfig>,
+    sticky_ttl_seconds: i64,
 }
 
 pub(crate) async fn run(state_root: &Path) -> anyhow::Result<()> {
@@ -50,12 +55,18 @@ pub(crate) async fn run(state_root: &Path) -> anyhow::Result<()> {
         redis: redis_conn::connect(&cfg.gateway.redis_url).await?,
         upstream_base_url: cfg.gateway.upstream_base_url.clone(),
         http: reqwest::Client::new(),
+        pools: cfg.pools.clone(),
+        sticky_ttl_seconds: cfg.gateway.sticky_ttl_seconds,
     });
 
     let router = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
-        .route("/authz", get(|| async { "ok\n" }))
+        .route("/authz", get(authz))
         .fallback(proxy_non_streaming)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            ensure_routing,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_gateway_session,
@@ -98,6 +109,66 @@ async fn proxy_non_streaming(
     request: Request<Body>,
 ) -> Result<Response, StatusCode> {
     proxy::forward_non_streaming(&state.http, &state.upstream_base_url, request).await
+}
+
+async fn ensure_routing(
+    State(state): State<Arc<ServeState>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if request.uri().path() == "/healthz" {
+        return Ok(next.run(request).await);
+    }
+
+    let session = request
+        .extensions()
+        .get::<gateway_sessions::GatewaySession>()
+        .cloned()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let pool = state
+        .pools
+        .get(&session.account_pool_id)
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let conversation_id = routing::extract_conversation_id(request.headers());
+    let path_and_query = request
+        .uri()
+        .path_and_query()
+        .map(axum::http::uri::PathAndQuery::as_str)
+        .unwrap_or_else(|| request.uri().path());
+    let method = request.method();
+    let non_sticky_key = format!("non-sticky:{method} {path_and_query}");
+
+    let mut conn = state.redis.clone();
+    let route_info = routing::route_account(
+        &mut conn,
+        &session.account_pool_id,
+        &pool.labels,
+        session.policy_key.as_deref(),
+        state.sticky_ttl_seconds,
+        conversation_id,
+        &non_sticky_key,
+    )
+    .await
+    .map_err(map_routing_error)?;
+
+    request.extensions_mut().insert(route_info);
+    Ok(next.run(request).await)
+}
+
+fn map_routing_error(err: anyhow::Error) -> StatusCode {
+    if err.downcast_ref::<redis::RedisError>().is_some() {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    StatusCode::INTERNAL_SERVER_ERROR
+}
+
+async fn authz(Extension(route_info): Extension<routing::RouteInfo>) -> String {
+    let conversation_id = route_info.conversation_id.as_deref().unwrap_or("-");
+    let pool_id = &route_info.account_pool_id;
+    let account_id = &route_info.account_id;
+    format!("ok\npool: {pool_id}\naccount: {account_id}\nconversation_id: {conversation_id}\n")
 }
 
 fn parse_bearer_token(value: &str) -> Option<&str> {
