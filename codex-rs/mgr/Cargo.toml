@@ -1,0 +1,25 @@
+[package]
+name = "codex-mgr"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "codex-mgr"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-backend-client = { workspace = true }
+codex-core = { workspace = true }
+codex-protocol = { workspace = true }
+dirs = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+toml = { workspace = true }
