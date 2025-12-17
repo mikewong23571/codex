@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use crate::accounts;
 use crate::run_cmd;
+use crate::serve;
 
 const DEFAULT_SHARED_DIRNAME: &str = ".codex-shared";
 const DEFAULT_ACCOUNTS_DIRNAME: &str = ".codex-accounts";
@@ -41,6 +42,7 @@ enum Commands {
     Login(LoginArgs),
     Accounts(AccountsArgs),
     Run(RunArgs),
+    Serve,
 }
 
 #[derive(Args, Debug)]
@@ -153,5 +155,6 @@ pub async fn run() -> anyhow::Result<()> {
             )
             .await
         }
+        Commands::Serve => serve::run(&state_root).await,
     }
 }

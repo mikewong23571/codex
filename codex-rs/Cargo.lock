@@ -1568,6 +1568,7 @@ name = "codex-mgr"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "codex-backend-client",
  "codex-core",
