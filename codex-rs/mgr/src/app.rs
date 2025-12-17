@@ -6,6 +6,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::accounts;
+use crate::pools;
 use crate::run_cmd;
 use crate::serve;
 
@@ -41,6 +42,7 @@ struct Cli {
 enum Commands {
     Login(LoginArgs),
     Accounts(AccountsArgs),
+    Pools(PoolsArgs),
     Run(RunArgs),
     Serve,
 }
@@ -62,6 +64,44 @@ struct AccountsArgs {
 enum AccountsCommands {
     List(AccountsListArgs),
     Del(AccountsDelArgs),
+}
+
+#[derive(Args, Debug)]
+struct PoolsArgs {
+    #[command(subcommand)]
+    command: PoolsCommands,
+}
+
+#[derive(Subcommand, Debug)]
+enum PoolsCommands {
+    Set(PoolsSetArgs),
+    List(PoolsListArgs),
+    Del(PoolsDelArgs),
+}
+
+#[derive(Args, Debug)]
+struct PoolsSetArgs {
+    pool_id: String,
+
+    /// Comma-separated account labels (e.g. --labels a,b,c).
+    #[arg(long, value_delimiter = ',', num_args = 1..)]
+    labels: Vec<String>,
+
+    /// Optional selection policy key for this pool.
+    #[arg(long)]
+    policy_key: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct PoolsListArgs {
+    /// Output JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct PoolsDelArgs {
+    pool_id: String,
 }
 
 #[derive(Args, Debug)]
@@ -138,6 +178,20 @@ pub async fn run() -> anyhow::Result<()> {
             AccountsCommands::Del(del) => {
                 accounts::del(&accounts_root, &state_root, del.label).await
             }
+        },
+        Commands::Pools(args) => match args.command {
+            PoolsCommands::Set(set) => {
+                pools::set(
+                    &state_root,
+                    &accounts_root,
+                    set.pool_id,
+                    set.labels,
+                    set.policy_key,
+                )
+                .await
+            }
+            PoolsCommands::List(list) => pools::list(&state_root, list.json).await,
+            PoolsCommands::Del(del) => pools::del(&state_root, del.pool_id).await,
         },
         Commands::Run(args) => {
             run_cmd::run(

@@ -3,6 +3,7 @@ pub mod app;
 mod config;
 mod label;
 mod layout;
+mod pools;
 mod run_cmd;
 mod serve;
 mod state;
