@@ -4,6 +4,7 @@ use axum::http::HeaderMap;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::header;
+use axum::http::header::HeaderValue;
 use axum::response::Response;
 
 use crate::header_policy;
@@ -14,6 +15,8 @@ pub(crate) async fn forward_non_streaming(
     http: &reqwest::Client,
     upstream_base_url: &str,
     request: Request<Body>,
+    authorization: &str,
+    chatgpt_account_id: Option<&str>,
 ) -> Result<Response, StatusCode> {
     let (parts, body) = request.into_parts();
     if request_accepts_event_stream(&parts.headers) {
@@ -36,7 +39,16 @@ pub(crate) async fn forward_non_streaming(
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let headers = header_policy::forward_request_headers(&parts.headers);
+    let mut headers = header_policy::forward_request_headers(&parts.headers);
+    let auth =
+        HeaderValue::from_str(authorization).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    headers.insert(header::AUTHORIZATION, auth);
+    if let Some(chatgpt_account_id) = chatgpt_account_id {
+        let account_id = HeaderValue::from_str(chatgpt_account_id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let _ = headers.insert("ChatGPT-Account-ID", account_id);
+    }
+
     let response = http
         .request(parts.method, upstream_url)
         .headers(headers)
