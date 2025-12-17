@@ -415,6 +415,51 @@ v1 选择 **Redis 作为 gateway session 的唯一权威存储**：
   - 建议 Redis 仅内网可达并启用访问控制
   - 建议 value 加密/或只缓存短期 access token（不存长效 refresh 凭证）
 
+## 观测与最小运维能力（M8）
+
+### HTTP endpoints
+
+- `GET /healthz`：进程存活（不鉴权）
+- `GET /readyz`：Redis `PING` 可用性（不鉴权；失败返回 503）
+- `GET /metrics`：Prometheus 文本指标（不鉴权）
+
+### Request ID（关联 client ↔ gateway 日志）
+
+- gateway 为每个请求生成 `request_id`，并在响应头写入：`x-codex-mgr-request-id: <request_id>`
+- `request_id` 仅用于观测，不参与路由/鉴权
+
+### Logging（v1 最小规范）
+
+- 每个（非 public）请求输出 1 条 `info` 汇总日志，字段至少包含：
+  - `request_id`
+  - `conversation`：`sha256_base64url(conversation_id)`（无会话头则为 `-`）
+  - `pool`（若已鉴权）
+  - `account`（若已路由）
+  - `status`（HTTP 状态码）
+  - `duration_ms`（time-to-headers）
+- 关键阶段出错时额外输出 `warn/error`：
+  - session lookup（Redis）
+  - routing（Redis / selector）
+  - token provider（读取/refresh）
+  - upstream transport / body read
+
+### Metrics（Prometheus）
+
+v1 提供最小集合（指标名可能随实现演进，但语义不变）：
+
+- `codex_mgr_gateway_requests_total`
+- `codex_mgr_gateway_requests_inflight`（time-to-headers）
+- `codex_mgr_gateway_requests_unauthorized_total`
+- `codex_mgr_gateway_requests_5xx_total`
+- `codex_mgr_gateway_redis_errors_total`
+- `codex_mgr_gateway_routing_errors_total`
+- `codex_mgr_gateway_token_errors_total`
+- `codex_mgr_gateway_upstream_requests_total`
+- `codex_mgr_gateway_upstream_errors_total`
+- `codex_mgr_gateway_upstream_latency_ms_sum` / `codex_mgr_gateway_upstream_latency_ms_count`
+- `codex_mgr_gateway_sse_streams_total` / `codex_mgr_gateway_sse_streams_inflight`
+- `codex_mgr_gateway_request_duration_ms_sum` / `codex_mgr_gateway_request_duration_ms_count`
+
 ## 验收标准（Definition of Done）
 
 - client 使用 `Authorization: Bearer <gateway_token>` 访问 gateway，SSE 流可正常返回

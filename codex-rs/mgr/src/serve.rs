@@ -5,6 +5,8 @@ use axum::extract::Extension;
 use axum::extract::State;
 use axum::http::Request;
 use axum::http::StatusCode;
+use axum::http::header;
+use axum::http::header::HeaderValue;
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::Response;
@@ -13,11 +15,16 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 use tokio::net::TcpListener;
+use tracing::Instrument;
 
 use crate::account_token_provider;
 use crate::config;
 use crate::gateway_sessions;
+use crate::observability;
 use crate::proxy;
 use crate::redis_conn;
 use crate::routing;
@@ -31,21 +38,25 @@ struct ServeState {
     sticky_ttl_seconds: i64,
     accounts_root: PathBuf,
     token_safety_window_seconds: i64,
+    metrics: Arc<observability::GatewayMetrics>,
 }
 
 pub(crate) async fn run(state_root: &Path, accounts_root: &Path) -> anyhow::Result<()> {
     let config_path = config::config_path(state_root);
     let cfg = config::load(state_root)?;
 
-    eprintln!("codex-mgr serve");
-    eprintln!("config: {}", config_path.display());
-    eprintln!("listen: {}", cfg.gateway.listen);
-    eprintln!("upstream_base_url: {}", cfg.gateway.upstream_base_url);
-    eprintln!("redis_url: {}", redact_url(&cfg.gateway.redis_url));
-    eprintln!("sticky_ttl_seconds: {}", cfg.gateway.sticky_ttl_seconds);
-    eprintln!(
-        "token_safety_window_seconds: {}",
-        cfg.gateway.token_safety_window_seconds
+    tracing::info!("codex-mgr serve");
+    tracing::info!(config = %config_path.display(), "loaded config");
+    tracing::info!(listen = %cfg.gateway.listen, "gateway listen");
+    tracing::info!(upstream_base_url = %cfg.gateway.upstream_base_url, "gateway upstream");
+    tracing::info!(redis_url = %redact_url(&cfg.gateway.redis_url), "gateway redis");
+    tracing::info!(
+        sticky_ttl_seconds = cfg.gateway.sticky_ttl_seconds,
+        "gateway sticky ttl"
+    );
+    tracing::info!(
+        token_safety_window_seconds = cfg.gateway.token_safety_window_seconds,
+        "gateway token safety window"
     );
 
     let listener = TcpListener::bind(&cfg.gateway.listen)
@@ -53,8 +64,9 @@ pub(crate) async fn run(state_root: &Path, accounts_root: &Path) -> anyhow::Resu
         .with_context(|| format!("binding to {}", cfg.gateway.listen))?;
     let addr = listener.local_addr().context("getting bound address")?;
 
-    eprintln!("codex-mgr gateway listening on http://{addr}");
+    tracing::info!("codex-mgr gateway listening on http://{addr}");
 
+    let gateway_metrics = Arc::new(observability::GatewayMetrics::default());
     let state = Arc::new(ServeState {
         redis: redis_conn::connect(&cfg.gateway.redis_url).await?,
         upstream_base_url: cfg.gateway.upstream_base_url.clone(),
@@ -63,10 +75,13 @@ pub(crate) async fn run(state_root: &Path, accounts_root: &Path) -> anyhow::Resu
         sticky_ttl_seconds: cfg.gateway.sticky_ttl_seconds,
         accounts_root: accounts_root.to_path_buf(),
         token_safety_window_seconds: cfg.gateway.token_safety_window_seconds,
+        metrics: gateway_metrics,
     });
 
     let router = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
+        .route("/readyz", get(readyz_handler))
+        .route("/metrics", get(metrics_handler))
         .route("/authz", get(authz))
         .fallback(proxy_non_streaming)
         .layer(middleware::from_fn_with_state(
@@ -76,6 +91,10 @@ pub(crate) async fn run(state_root: &Path, accounts_root: &Path) -> anyhow::Resu
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_gateway_session,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            with_request_context,
         ))
         .with_state(state);
 
@@ -90,7 +109,7 @@ async fn require_gateway_session(
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if request.uri().path() == "/healthz" {
+    if is_public_path(request.uri().path()) {
         return Ok(next.run(request).await);
     }
 
@@ -99,13 +118,29 @@ async fn require_gateway_session(
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(parse_bearer_token)
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+        .ok_or_else(|| {
+            tracing::warn!("missing bearer token");
+            StatusCode::UNAUTHORIZED
+        })?;
 
     let mut conn = state.redis.clone();
     let session = gateway_sessions::get(&mut conn, token)
         .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+        .map_err(|err| {
+            tracing::error!(error = %err, "redis error in session lookup");
+            state
+                .metrics
+                .redis_errors_total
+                .fetch_add(1, Ordering::Relaxed);
+            StatusCode::SERVICE_UNAVAILABLE
+        })?
+        .ok_or_else(|| {
+            tracing::warn!("gateway session not found");
+            StatusCode::UNAUTHORIZED
+        })?;
+    if let Some(trace_data) = request.extensions().get::<Arc<RequestTraceData>>() {
+        let _ = trace_data.pool_id.set(session.account_pool_id.clone());
+    }
     request.extensions_mut().insert(session);
     Ok(next.run(request).await)
 }
@@ -123,7 +158,23 @@ async fn proxy_non_streaming(
         state.token_safety_window_seconds,
     )
     .await
-    .map_err(map_auth_error)?;
+    .map_err(|err| {
+        if err.downcast_ref::<redis::RedisError>().is_some() {
+            tracing::error!(error = %err, "redis error in account token provider");
+            state
+                .metrics
+                .redis_errors_total
+                .fetch_add(1, Ordering::Relaxed);
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+
+        tracing::warn!(error = %err, account_id = %route_info.account_id, "token provider error");
+        state
+            .metrics
+            .token_errors_total
+            .fetch_add(1, Ordering::Relaxed);
+        StatusCode::BAD_GATEWAY
+    })?;
 
     proxy::forward(
         &state.http,
@@ -131,6 +182,7 @@ async fn proxy_non_streaming(
         request,
         &auth.authorization,
         auth.chatgpt_account_id.as_deref(),
+        Arc::clone(&state.metrics),
     )
     .await
 }
@@ -140,7 +192,7 @@ async fn ensure_routing(
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if request.uri().path() == "/healthz" {
+    if is_public_path(request.uri().path()) {
         return Ok(next.run(request).await);
     }
 
@@ -175,24 +227,30 @@ async fn ensure_routing(
         &non_sticky_key,
     )
     .await
-    .map_err(map_routing_error)?;
+    .map_err(|err| {
+        if err.downcast_ref::<redis::RedisError>().is_some() {
+            tracing::error!(error = %err, "redis error in routing");
+            state
+                .metrics
+                .redis_errors_total
+                .fetch_add(1, Ordering::Relaxed);
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
+
+        tracing::error!(error = %err, "routing error");
+        state
+            .metrics
+            .routing_errors_total
+            .fetch_add(1, Ordering::Relaxed);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    if let Some(trace_data) = request.extensions().get::<Arc<RequestTraceData>>() {
+        let _ = trace_data.account_id.set(route_info.account_id.clone());
+    }
 
     request.extensions_mut().insert(route_info);
     Ok(next.run(request).await)
-}
-
-fn map_routing_error(err: anyhow::Error) -> StatusCode {
-    if err.downcast_ref::<redis::RedisError>().is_some() {
-        return StatusCode::SERVICE_UNAVAILABLE;
-    }
-    StatusCode::INTERNAL_SERVER_ERROR
-}
-
-fn map_auth_error(err: anyhow::Error) -> StatusCode {
-    if err.downcast_ref::<redis::RedisError>().is_some() {
-        return StatusCode::SERVICE_UNAVAILABLE;
-    }
-    StatusCode::BAD_GATEWAY
 }
 
 async fn authz(Extension(route_info): Extension<routing::RouteInfo>) -> String {
@@ -231,4 +289,155 @@ fn redact_url(url: &str) -> String {
         Some((user, _password)) => format!("{}{}:****{}", &url[..scheme_end], user, rest),
         None => url.to_string(),
     }
+}
+
+#[derive(Debug)]
+struct RequestTraceData {
+    request_id: String,
+    conversation_hash: Option<String>,
+    pool_id: OnceLock<String>,
+    account_id: OnceLock<String>,
+}
+
+async fn with_request_context(
+    State(state): State<Arc<ServeState>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let start = Instant::now();
+    let public_path = is_public_path(request.uri().path());
+    if !public_path {
+        state.metrics.requests_total.fetch_add(1, Ordering::Relaxed);
+        state
+            .metrics
+            .requests_inflight
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    let request_id = observability::new_request_id();
+    let conversation_id = routing::extract_conversation_id(request.headers());
+    let conversation_hash = conversation_id
+        .as_deref()
+        .map(observability::hash_opaque_id);
+    let trace_data = Arc::new(RequestTraceData {
+        request_id,
+        conversation_hash,
+        pool_id: OnceLock::new(),
+        account_id: OnceLock::new(),
+    });
+    request.extensions_mut().insert(Arc::clone(&trace_data));
+
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let conversation = trace_data.conversation_hash.as_deref().unwrap_or("-");
+    let span = tracing::info_span!(
+        "gateway_request",
+        request_id = %trace_data.request_id,
+        method = %method,
+        path = %path,
+        conversation = %conversation,
+    );
+
+    let mut response = next.run(request).instrument(span.clone()).await;
+
+    let elapsed = start.elapsed();
+    if !public_path {
+        state
+            .metrics
+            .requests_inflight
+            .fetch_sub(1, Ordering::Relaxed);
+        record_request_duration_ms(&state.metrics, elapsed);
+    }
+
+    let status = response.status();
+    if !public_path {
+        if status == StatusCode::UNAUTHORIZED {
+            state
+                .metrics
+                .requests_unauthorized_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        if status.is_server_error() {
+            state
+                .metrics
+                .requests_5xx_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    if let Ok(value) = HeaderValue::from_str(&trace_data.request_id) {
+        let _ = response
+            .headers_mut()
+            .insert("x-codex-mgr-request-id", value);
+    }
+
+    let duration_ms = duration_ms(elapsed);
+    let pool = trace_data.pool_id.get().map(String::as_str).unwrap_or("-");
+    let account = trace_data
+        .account_id
+        .get()
+        .map(String::as_str)
+        .unwrap_or("-");
+
+    if !public_path {
+        let _guard = span.enter();
+        tracing::info!(
+            status = i64::from(status.as_u16()),
+            duration_ms,
+            pool,
+            account,
+            "handled request"
+        );
+    }
+
+    Ok(response)
+}
+
+fn record_request_duration_ms(
+    metrics: &observability::GatewayMetrics,
+    elapsed: std::time::Duration,
+) {
+    let Ok(ms) = i64::try_from(elapsed.as_millis()) else {
+        return;
+    };
+    metrics
+        .request_duration_ms_sum
+        .fetch_add(ms, Ordering::Relaxed);
+    metrics
+        .request_duration_ms_count
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+fn duration_ms(elapsed: std::time::Duration) -> i64 {
+    i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+}
+
+fn is_public_path(path: &str) -> bool {
+    matches!(path, "/healthz" | "/readyz" | "/metrics")
+}
+
+async fn readyz_handler(State(state): State<Arc<ServeState>>) -> Result<String, StatusCode> {
+    let mut conn = state.redis.clone();
+    let pong: redis::RedisResult<String> = redis::cmd("PING").query_async(&mut conn).await;
+    match pong {
+        Ok(_) => Ok("ok\n".to_string()),
+        Err(err) => {
+            state
+                .metrics
+                .redis_errors_total
+                .fetch_add(1, Ordering::Relaxed);
+            tracing::error!(error = %err, "redis PING failed");
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
+}
+
+async fn metrics_handler(State(state): State<Arc<ServeState>>) -> Response {
+    let body = state.metrics.render_prometheus();
+    let mut out = Response::new(Body::from(body));
+    let _ = out.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; version=0.0.4"),
+    );
+    out
 }

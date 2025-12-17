@@ -6,8 +6,17 @@ use axum::http::StatusCode;
 use axum::http::header;
 use axum::http::header::HeaderValue;
 use axum::response::Response;
+use bytes::Bytes;
+use futures::Stream;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::task::Context;
+use std::task::Poll;
+use std::time::Instant;
 
 use crate::header_policy;
+use crate::observability::GatewayMetrics;
 
 const MAX_BODY_BYTES: i64 = 10 * 1024 * 1024;
 
@@ -17,6 +26,7 @@ pub(crate) async fn forward(
     request: Request<Body>,
     authorization: &str,
     chatgpt_account_id: Option<&str>,
+    metrics: Arc<GatewayMetrics>,
 ) -> Result<Response, StatusCode> {
     let (parts, body) = request.into_parts();
     let wants_event_stream = request_accepts_event_stream(&parts.headers);
@@ -47,23 +57,42 @@ pub(crate) async fn forward(
         let _ = headers.insert("ChatGPT-Account-ID", account_id);
     }
 
-    let response = http
+    metrics
+        .upstream_requests_total
+        .fetch_add(1, Ordering::Relaxed);
+    let upstream_start = Instant::now();
+    let response = match http
         .request(parts.method, upstream_url)
         .headers(headers)
         .body(body_bytes)
         .send()
         .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    {
+        Ok(response) => response,
+        Err(err) => {
+            tracing::warn!(error = %err, "upstream request failed");
+            metrics
+                .upstream_errors_total
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(StatusCode::BAD_GATEWAY);
+        }
+    };
 
     let status = response.status();
+    record_upstream_status(&metrics, status);
+    record_upstream_latency_ms(&metrics, upstream_start.elapsed());
+
     let headers = header_policy::forward_response_headers(response.headers());
     let body = if wants_event_stream {
-        Body::from_stream(response.bytes_stream())
+        metrics.sse_streams_total.fetch_add(1, Ordering::Relaxed);
+        metrics.sse_streams_inflight.fetch_add(1, Ordering::Relaxed);
+        let guard = InflightGuard { metrics };
+        Body::from_stream(GuardedBytesStream::new(response.bytes_stream(), guard))
     } else {
-        let response_body = response
-            .bytes()
-            .await
-            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        let response_body = response.bytes().await.map_err(|err| {
+            tracing::warn!(error = %err, "upstream response body read failed");
+            StatusCode::BAD_GATEWAY
+        })?;
         Body::from(response_body)
     };
 
@@ -78,4 +107,78 @@ fn request_accepts_event_stream(headers: &HeaderMap) -> bool {
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("text/event-stream"))
+}
+
+fn record_upstream_status(metrics: &GatewayMetrics, status: reqwest::StatusCode) {
+    if status.is_success() {
+        metrics
+            .upstream_responses_2xx_total
+            .fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    if status.is_redirection() {
+        metrics
+            .upstream_responses_3xx_total
+            .fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    if status.is_client_error() {
+        metrics
+            .upstream_responses_4xx_total
+            .fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    metrics
+        .upstream_responses_5xx_total
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+fn record_upstream_latency_ms(metrics: &GatewayMetrics, elapsed: std::time::Duration) {
+    let Ok(ms) = i64::try_from(elapsed.as_millis()) else {
+        return;
+    };
+    metrics
+        .upstream_latency_ms_sum
+        .fetch_add(ms, Ordering::Relaxed);
+    metrics
+        .upstream_latency_ms_count
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+struct InflightGuard {
+    metrics: Arc<GatewayMetrics>,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.metrics
+            .sse_streams_inflight
+            .fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+struct GuardedBytesStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>,
+    _guard: InflightGuard,
+}
+
+impl GuardedBytesStream {
+    fn new(
+        inner: impl Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
+        guard: InflightGuard,
+    ) -> Self {
+        Self {
+            inner: Box::pin(inner),
+            _guard: guard,
+        }
+    }
+}
+
+impl Stream for GuardedBytesStream {
+    type Item = Result<Bytes, reqwest::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        this.inner.as_mut().poll_next(cx)
+    }
 }

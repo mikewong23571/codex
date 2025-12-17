@@ -132,8 +132,14 @@
 
 交付：
 
-- `tracing` 日志（包含 request_id、conversation_id hash、account_id 可选）
-- 指标（可选）：请求数、上游延迟、401/5xx 计数
+- `tracing` 日志（包含 request_id、conversation_id hash、pool/account 可选、status、latency）
+  - gateway 为每个（非 public）请求输出 1 条 info 级别汇总日志
+  - gateway 在响应中附带 `x-codex-mgr-request-id`，便于 client 侧关联日志
+- 运维端点：
+  - `/healthz`：进程存活
+  - `/readyz`：Redis `PING` 可用性（失败返回 503）
+  - `/metrics`：Prometheus 文本格式指标
+- 指标（最小集合）：请求数、401/5xx 计数、Redis 错误计数、上游延迟（time-to-headers）、SSE inflight
 
 验收：
 
