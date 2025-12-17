@@ -1,10 +1,25 @@
 use anyhow::Context;
 use axum::Router;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::Request;
+use axum::http::StatusCode;
+use axum::middleware;
+use axum::middleware::Next;
+use axum::response::Response;
 use axum::routing::get;
 use std::path::Path;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use crate::config;
+use crate::gateway_sessions;
+use crate::redis_conn;
+
+#[derive(Clone)]
+struct ServeState {
+    redis: redis::aio::ConnectionManager,
+}
 
 pub(crate) async fn run(state_root: &Path) -> anyhow::Result<()> {
     let config_path = config::config_path(state_root);
@@ -28,12 +43,57 @@ pub(crate) async fn run(state_root: &Path) -> anyhow::Result<()> {
 
     eprintln!("codex-mgr gateway listening on http://{addr}");
 
-    let router = Router::new().route("/healthz", get(|| async { "ok\n" }));
+    let state = Arc::new(ServeState {
+        redis: redis_conn::connect(&cfg.gateway.redis_url).await?,
+    });
+
+    let router = Router::new()
+        .route("/healthz", get(|| async { "ok\n" }))
+        .route("/authz", get(|| async { "ok\n" }))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_gateway_session,
+        ))
+        .with_state(state);
 
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+async fn require_gateway_session(
+    State(state): State<Arc<ServeState>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if request.uri().path() == "/healthz" {
+        return Ok(next.run(request).await);
+    }
+
+    let token = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_bearer_token)
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let mut conn = state.redis.clone();
+    let session = gateway_sessions::get(&mut conn, token)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    request.extensions_mut().insert(session);
+    Ok(next.run(request).await)
+}
+
+fn parse_bearer_token(value: &str) -> Option<&str> {
+    let mut parts = value.split_whitespace();
+    let scheme = parts.next()?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    parts.next()
 }
 
 async fn shutdown_signal() {

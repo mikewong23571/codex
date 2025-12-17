@@ -83,7 +83,7 @@
 
 作为 Operator：
 
-- 我希望执行 `codex-mgr gateway issue --pool <pool_id> --ttl <duration> [--note <text>]`：
+- 我希望执行 `codex-mgr gateway issue --pool <pool_id> --ttl-seconds <seconds> [--note <text>]`：
   - 生成 `gateway_token`（opaque）
   - 写入 Redis：`gw:session:<gateway_token> -> GatewaySession`（TTL 对齐）
   - 输出 token（可选同时输出一个 “token_id” 便于撤销）

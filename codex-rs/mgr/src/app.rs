@@ -6,6 +6,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::accounts;
+use crate::gateway;
 use crate::pools;
 use crate::run_cmd;
 use crate::serve;
@@ -43,6 +44,7 @@ enum Commands {
     Login(LoginArgs),
     Accounts(AccountsArgs),
     Pools(PoolsArgs),
+    Gateway(GatewayArgs),
     Run(RunArgs),
     Serve,
 }
@@ -102,6 +104,50 @@ struct PoolsListArgs {
 #[derive(Args, Debug)]
 struct PoolsDelArgs {
     pool_id: String,
+}
+
+#[derive(Args, Debug)]
+struct GatewayArgs {
+    #[command(subcommand)]
+    command: GatewayCommands,
+}
+
+#[derive(Subcommand, Debug)]
+enum GatewayCommands {
+    Issue(GatewayIssueArgs),
+    List(GatewayListArgs),
+    Revoke(GatewayRevokeArgs),
+}
+
+#[derive(Args, Debug)]
+struct GatewayIssueArgs {
+    /// Pool id (configured via `codex-mgr pools set`).
+    #[arg(long)]
+    pool: String,
+
+    /// TTL for this gateway token session (default: 86400).
+    #[arg(long)]
+    ttl_seconds: Option<i64>,
+
+    /// Optional human note to store alongside the session.
+    #[arg(long)]
+    note: Option<String>,
+
+    /// Output JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct GatewayListArgs {
+    /// Output JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct GatewayRevokeArgs {
+    token: String,
 }
 
 #[derive(Args, Debug)]
@@ -192,6 +238,20 @@ pub async fn run() -> anyhow::Result<()> {
             }
             PoolsCommands::List(list) => pools::list(&state_root, list.json).await,
             PoolsCommands::Del(del) => pools::del(&state_root, del.pool_id).await,
+        },
+        Commands::Gateway(args) => match args.command {
+            GatewayCommands::Issue(issue) => {
+                gateway::issue(
+                    &state_root,
+                    issue.pool,
+                    issue.ttl_seconds,
+                    issue.note,
+                    issue.json,
+                )
+                .await
+            }
+            GatewayCommands::List(list) => gateway::list(&state_root, list.json).await,
+            GatewayCommands::Revoke(revoke) => gateway::revoke(&state_root, revoke.token).await,
         },
         Commands::Run(args) => {
             run_cmd::run(
