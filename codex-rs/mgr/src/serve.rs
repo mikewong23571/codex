@@ -19,7 +19,6 @@ use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::net::TcpListener;
-use tracing::Instrument;
 
 use crate::account_token_provider;
 use crate::config;
@@ -45,18 +44,14 @@ pub(crate) async fn run(state_root: &Path, accounts_root: &Path) -> anyhow::Resu
     let config_path = config::config_path(state_root);
     let cfg = config::load(state_root)?;
 
-    tracing::info!("codex-mgr serve");
-    tracing::info!(config = %config_path.display(), "loaded config");
-    tracing::info!(listen = %cfg.gateway.listen, "gateway listen");
-    tracing::info!(upstream_base_url = %cfg.gateway.upstream_base_url, "gateway upstream");
-    tracing::info!(redis_url = %redact_url(&cfg.gateway.redis_url), "gateway redis");
     tracing::info!(
+        event = %"serve_start",
+        config = %config_path.display(),
+        listen = %cfg.gateway.listen,
+        upstream_base_url = %cfg.gateway.upstream_base_url,
+        redis_url = %redact_url(&cfg.gateway.redis_url),
         sticky_ttl_seconds = cfg.gateway.sticky_ttl_seconds,
-        "gateway sticky ttl"
-    );
-    tracing::info!(
         token_safety_window_seconds = cfg.gateway.token_safety_window_seconds,
-        "gateway token safety window"
     );
     warn_if_upstream_base_url_is_suspicious(&cfg.gateway.upstream_base_url);
 
@@ -65,7 +60,7 @@ pub(crate) async fn run(state_root: &Path, accounts_root: &Path) -> anyhow::Resu
         .with_context(|| format!("binding to {}", cfg.gateway.listen))?;
     let addr = listener.local_addr().context("getting bound address")?;
 
-    tracing::info!("codex-mgr gateway listening on http://{addr}");
+    tracing::info!(event = %"serve_listening", addr = %addr);
 
     let gateway_metrics = Arc::new(observability::GatewayMetrics::default());
     let state = Arc::new(ServeState {
@@ -340,16 +335,7 @@ async fn with_request_context(
 
     let method = request.method().clone();
     let path = request.uri().path().to_string();
-    let conversation = trace_data.conversation_hash.as_deref().unwrap_or("-");
-    let span = tracing::info_span!(
-        "gateway_request",
-        request_id = %trace_data.request_id,
-        method = %method,
-        path = %path,
-        conversation = %conversation,
-    );
-
-    let mut response = next.run(request).instrument(span.clone()).await;
+    let mut response = next.run(request).await;
 
     let elapsed = start.elapsed();
     if !public_path {
@@ -389,15 +375,19 @@ async fn with_request_context(
         .get()
         .map(String::as_str)
         .unwrap_or("-");
+    let conversation = trace_data.conversation_hash.as_deref().unwrap_or("-");
 
     if !public_path {
-        let _guard = span.enter();
         tracing::info!(
+            event = %"request",
+            request_id = %trace_data.request_id,
+            method = %method,
+            path = %path,
+            conversation = %conversation,
             status = i64::from(status.as_u16()),
             duration_ms,
-            pool,
-            account,
-            "handled request"
+            pool = %pool,
+            account = %account,
         );
     }
 
