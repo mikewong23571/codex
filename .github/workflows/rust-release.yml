@@ -116,7 +116,7 @@ jobs:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
 
-      - if: ${{ contains(matrix.target, 'windows') }}
+      - if: ${{ contains(matrix.target, 'windows') && secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' }}
         name: Sign Windows binaries with Azure Trusted Signing
         uses: ./.github/actions/windows-code-sign
         with:
@@ -128,7 +128,7 @@ jobs:
           account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
+      - if: ${{ matrix.runner == 'macos-15-xlarge' && secrets.APPLE_CERTIFICATE_P12 != '' }}
         name: MacOS code signing
         uses: ./.github/actions/macos-code-sign
         with:
@@ -236,7 +236,7 @@ jobs:
     uses: ./.github/workflows/shell-tool-mcp.yml
     with:
       release-tag: ${{ github.ref_name }}
-      publish: true
+      publish: false
     secrets: inherit
 
   release:
@@ -348,7 +348,7 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    if: ${{ needs.release.outputs.should_publish_npm == 'true' && github.repository == 'openai/codex' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
