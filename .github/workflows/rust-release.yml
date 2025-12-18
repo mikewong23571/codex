@@ -323,7 +323,8 @@ jobs:
             --release-version "${{ steps.release_name.outputs.name }}" \
             --package codex \
             --package codex-responses-api-proxy \
-            --package codex-sdk
+            --package codex-sdk \
+            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
