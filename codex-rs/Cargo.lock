@@ -5396,7 +5396,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "ryu",
- "socket2 0.6.0",
+ "socket2 0.6.1",
  "tokio",
  "tokio-util",
  "url",

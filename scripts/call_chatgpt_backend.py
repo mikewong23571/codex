@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 
-DEFAULT_AUTH_JSON = Path("/home/mikewong/.codex-accounts/whale-styleofwong/auth.json")
+DEFAULT_AUTH_JSON = Path("/home/mikewong/.codex-mgr/accounts/whale-styleofwong/auth.json")
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 DEFAULT_CLIENT_VERSION = "99.99.99"
 DEFAULT_MODEL_FALLBACK = "gpt-5.2"

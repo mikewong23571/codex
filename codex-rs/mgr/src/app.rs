@@ -12,8 +12,6 @@ use crate::pools;
 use crate::run_cmd;
 use crate::serve;
 
-const DEFAULT_SHARED_DIRNAME: &str = ".codex-shared";
-const DEFAULT_ACCOUNTS_DIRNAME: &str = ".codex-accounts";
 const DEFAULT_STATE_DIRNAME: &str = ".codex-mgr";
 
 #[derive(Parser, Debug)]
@@ -191,18 +189,46 @@ pub async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let home = dirs::home_dir().context("failed to resolve home directory")?;
-    let shared_root = cli
-        .shared_root
-        .clone()
-        .unwrap_or_else(|| home.join(DEFAULT_SHARED_DIRNAME));
-    let accounts_root = cli
-        .accounts_root
-        .clone()
-        .unwrap_or_else(|| home.join(DEFAULT_ACCOUNTS_DIRNAME));
     let state_root = cli
         .state_root
         .clone()
         .unwrap_or_else(|| home.join(DEFAULT_STATE_DIRNAME));
+
+    let shared_root = cli
+        .shared_root
+        .clone()
+        .unwrap_or_else(|| state_root.join("shared"));
+
+    let accounts_root = cli
+        .accounts_root
+        .clone()
+        .unwrap_or_else(|| state_root.join("accounts"));
+
+    if cli.shared_root.is_none() {
+        let legacy_shared = home.join(".codex-shared");
+        if legacy_shared.exists() && !shared_root.exists() {
+            tracing::warn!(
+                "Legacy shared directory found at {:?}, but new location {:?} does not exist. Please move it: `mv {:?} {:?}`",
+                legacy_shared,
+                shared_root,
+                legacy_shared,
+                shared_root
+            );
+        }
+    }
+
+    if cli.accounts_root.is_none() {
+        let legacy_accounts = home.join(".codex-accounts");
+        if legacy_accounts.exists() && !accounts_root.exists() {
+            tracing::warn!(
+                "Legacy accounts directory found at {:?}, but new location {:?} does not exist. Please move it: `mv {:?} {:?}`",
+                legacy_accounts,
+                accounts_root,
+                legacy_accounts,
+                accounts_root
+            );
+        }
+    }
 
     std::fs::create_dir_all(&shared_root).context("creating shared_root")?;
     std::fs::create_dir_all(&accounts_root).context("creating accounts_root")?;
