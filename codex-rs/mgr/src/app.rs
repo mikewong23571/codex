@@ -23,15 +23,15 @@ struct Cli {
     codex_path: Option<PathBuf>,
 
     /// Root directory for shared non-auth Codex state.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "CODEX_MGR_SHARED_ROOT")]
     shared_root: Option<PathBuf>,
 
     /// Root directory for per-account auth homes.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "CODEX_MGR_ACCOUNTS_ROOT")]
     accounts_root: Option<PathBuf>,
 
     /// Root directory for codex-mgr state (cache, metadata).
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "CODEX_MGR_STATE_ROOT")]
     state_root: Option<PathBuf>,
 
     #[command(subcommand)]
