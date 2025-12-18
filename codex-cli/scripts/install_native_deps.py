@@ -217,7 +217,7 @@ def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
         "--dir",
         str(dest_dir),
         "--repo",
-        "openai/codex",
+        os.environ.get("GITHUB_REPOSITORY", "openai/codex"),
         workflow_id,
     ]
     subprocess.check_call(cmd)
