@@ -13,7 +13,7 @@
 
 作为 Operator：
 
-- 我希望执行 `codex-mgr login --label <label>` 来新增一个账号，并将该账号的 `auth.json` 存储到 `~/.codex-accounts/<label>/auth.json`。
+- 我希望执行 `codex-mgr login --label <label>` 来新增一个账号，并将该账号的 `auth.json` 存储到 `~/.codex-mgr/accounts/<label>/auth.json`。
 - 成功条件：
   - label 校验通过且唯一
   - upstream `codex login` 完成且 `auth.json` 中存在 `refresh_token`
@@ -64,7 +64,7 @@
   - `codex-mgr pools del <pool_id>`
 - 配置落盘（v1 约定）：写入 `$STATE_ROOT/config.toml`（默认 `~/.codex-mgr/config.toml`）
 - 成功条件：
-  - pool 中的 label 都存在（对应 `~/.codex-accounts/<label>/auth.json` 可读）
+  - pool 中的 label 都存在（对应 `~/.codex-mgr/accounts/<label>/auth.json` 可读）
   - `serve` 能根据 `pool_id` 找到成员列表
 
 ### US-6：启动 gateway（SSE 透传）

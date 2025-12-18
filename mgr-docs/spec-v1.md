@@ -10,9 +10,9 @@ Scope: guarantee happy-path behavior for `login(label)`, `accounts list`, `accou
 
 Default locations:
 
-- `shared_root = ~/.codex-shared/`
-- `accounts_root = ~/.codex-accounts/`
-- `state_root = ~/.codex-mgr/`
+- `state_root = ~/.codex-mgr/` (contains `config.toml`, `state.json`)
+- `shared_root = ~/.codex-mgr/shared/`
+- `accounts_root = ~/.codex-mgr/accounts/`
 
 ## 2) Storage layout
 
