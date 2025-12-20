@@ -43,6 +43,21 @@ fn should_drop_request_header(name: &HeaderName, connection_hops: &[HeaderName])
     if *name == header::CONTENT_LENGTH {
         return true;
     }
+
+    let name_str = name.as_str();
+    if name_str.starts_with("cf-") {
+        return true;
+    }
+    if name_str == "cdn-loop" {
+        return true;
+    }
+    if name_str.starts_with("x-forwarded-") {
+        return true;
+    }
+    if name_str == "x-real-ip" {
+        return true;
+    }
+
     false
 }
 

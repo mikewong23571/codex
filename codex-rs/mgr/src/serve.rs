@@ -38,9 +38,14 @@ struct ServeState {
     accounts_root: PathBuf,
     token_safety_window_seconds: i64,
     metrics: Arc<observability::GatewayMetrics>,
+    debug: bool,
 }
 
-pub(crate) async fn run(state_root: &Path, accounts_root: &Path) -> anyhow::Result<()> {
+pub(crate) async fn run(
+    state_root: &Path,
+    accounts_root: &Path,
+    debug: bool,
+) -> anyhow::Result<()> {
     let config_path = config::config_path(state_root);
     let cfg = config::load(state_root)?;
 
@@ -72,6 +77,7 @@ pub(crate) async fn run(state_root: &Path, accounts_root: &Path) -> anyhow::Resu
         accounts_root: accounts_root.to_path_buf(),
         token_safety_window_seconds: cfg.gateway.token_safety_window_seconds,
         metrics: gateway_metrics,
+        debug,
     });
 
     let router = Router::new()
@@ -179,6 +185,7 @@ async fn proxy_non_streaming(
         &auth.authorization,
         auth.chatgpt_account_id.as_deref(),
         Arc::clone(&state.metrics),
+        state.debug,
     )
     .await
 }

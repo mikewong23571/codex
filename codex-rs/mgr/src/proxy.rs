@@ -27,8 +27,17 @@ pub(crate) async fn forward(
     authorization: &str,
     chatgpt_account_id: Option<&str>,
     metrics: Arc<GatewayMetrics>,
+    debug: bool,
 ) -> Result<Response, StatusCode> {
     let (parts, body) = request.into_parts();
+    
+    if debug {
+        tracing::info!("--- [DEBUG] Incoming Request Headers ---");
+        for (name, value) in &parts.headers {
+            tracing::info!("{}: {:?}", name, value);
+        }
+    }
+
     let wants_event_stream = request_accepts_event_stream(&parts.headers);
 
     let path_and_query = parts
@@ -55,6 +64,13 @@ pub(crate) async fn forward(
         let account_id = HeaderValue::from_str(chatgpt_account_id)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let _ = headers.insert("ChatGPT-Account-ID", account_id);
+    }
+
+    if debug {
+        tracing::info!("--- [DEBUG] Outgoing Request Headers ---");
+        for (name, value) in &headers {
+            tracing::info!("{}: {:?}", name, value);
+        }
     }
 
     metrics

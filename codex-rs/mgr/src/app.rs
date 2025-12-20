@@ -45,7 +45,7 @@ enum Commands {
     Pools(PoolsArgs),
     Gateway(GatewayArgs),
     Run(RunArgs),
-    Serve,
+    Serve(ServeArgs),
 }
 
 #[derive(Args, Debug)]
@@ -159,6 +159,13 @@ struct AccountsListArgs {
 #[derive(Args, Debug)]
 struct AccountsDelArgs {
     label: String,
+}
+
+#[derive(Args, Debug)]
+struct ServeArgs {
+    /// Enable debug logging of headers.
+    #[arg(long)]
+    debug: bool,
 }
 
 #[derive(Args, Debug)]
@@ -297,6 +304,6 @@ pub async fn run() -> anyhow::Result<()> {
             )
             .await
         }
-        Commands::Serve => serve::run(&state_root, &accounts_root).await,
+        Commands::Serve(args) => serve::run(&state_root, &accounts_root, args.debug).await,
     }
 }
