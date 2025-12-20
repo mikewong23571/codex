@@ -101,6 +101,161 @@ pub(crate) async fn del(state_root: &Path, pool_id: String) -> anyhow::Result<()
     Ok(())
 }
 
+
+pub(crate) async fn add_member(
+    state_root: &Path,
+    accounts_root: &Path,
+    pool_id: String,
+    label: String,
+) -> anyhow::Result<()> {
+    validate_pool_id(&pool_id)?;
+    validate_label(&label)?;
+    ensure_auth_present(accounts_root, &label)?;
+
+    let mut root = config::load_value_for_update(state_root)?;
+    // We need to fetch existing pool definition.
+    // config module doesn't expose get_pool easily for update, it exposes set_pool and extract_pools.
+    // We can extract, find, modify, then set.
+    
+    // Actually, config::load_value_for_update returns a toml::Value (Table).
+    // We can navigate it.
+    
+    let pools_table = root
+        .as_table_mut()
+        .and_then(|t| t.get_mut("pools"))
+        .and_then(|v| v.as_table_mut());
+        
+    let pools_table = match pools_table {
+        Some(t) => t,
+        None => anyhow::bail!("pool {pool_id:?} not found (no pools section)"),
+    };
+
+    let pool_entry = pools_table.get_mut(&pool_id);
+    let pool_entry = match pool_entry {
+        Some(e) => e,
+        None => anyhow::bail!("pool {pool_id:?} does not exist"),
+    };
+    
+    // pool_entry should be a Table with "labels" Array.
+    let labels_array = pool_entry
+        .get_mut("labels")
+        .and_then(|v| v.as_array_mut())
+        .context("invalid pool config: labels is not an array")?;
+
+    let label_val = toml::Value::String(label.clone());
+    if !labels_array.contains(&label_val) {
+        labels_array.push(label_val);
+        // Sort for consistency?
+        labels_array.sort_by(|a, b| {
+             let s_a = a.as_str().unwrap_or("");
+             let s_b = b.as_str().unwrap_or("");
+             s_a.cmp(s_b)
+        });
+        config::write_value(state_root, &root)?;
+        println!("Added {label:?} to pool {pool_id:?}");
+    } else {
+        println!("{label:?} is already in pool {pool_id:?}");
+    }
+    
+    Ok(())
+}
+
+pub(crate) async fn remove_member(
+    state_root: &Path,
+    pool_id: String,
+    label: String,
+) -> anyhow::Result<()> {
+    validate_pool_id(&pool_id)?;
+    // No need to validate label format strictly, just remove it if matches string.
+    
+    let mut root = config::load_value_for_update(state_root)?;
+    let pools_table = root
+        .as_table_mut()
+        .and_then(|t| t.get_mut("pools"))
+        .and_then(|v| v.as_table_mut());
+
+    let pools_table = match pools_table {
+        Some(t) => t,
+        None => anyhow::bail!("pool {pool_id:?} not found"),
+    };
+
+    let pool_entry = pools_table.get_mut(&pool_id);
+    let pool_entry = match pool_entry {
+        Some(e) => e,
+        None => anyhow::bail!("pool {pool_id:?} does not exist"),
+    };
+
+    let labels_array = pool_entry
+        .get_mut("labels")
+        .and_then(|v| v.as_array_mut())
+        .context("invalid pool config: labels is not an array")?;
+
+    let label_val = toml::Value::String(label.clone());
+    if let Some(pos) = labels_array.iter().position(|x| x == &label_val) {
+        if labels_array.len() <= 1 {
+            anyhow::bail!("cannot remove last member {label:?} from pool {pool_id:?}");
+        }
+        labels_array.remove(pos);
+        config::write_value(state_root, &root)?;
+        println!("Removed {label:?} from pool {pool_id:?}");
+    } else {
+        anyhow::bail!("member {label:?} not found in pool {pool_id:?}");
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn validate(
+    state_root: &Path,
+    accounts_root: &Path,
+    target_pool_id: Option<String>,
+) -> anyhow::Result<()> {
+    let root = config::load_value_optional(state_root)?;
+    let pools = config::extract_pools(&root)?;
+
+    if pools.is_empty() {
+        println!("No pools configured to validate.");
+        return Ok(());
+    }
+
+    let mut all_ok = true;
+
+    for (pool_id, pool) in pools {
+        if let Some(target) = &target_pool_id {
+            if &pool_id != target {
+                continue;
+            }
+        }
+        
+        print!("Validating pool {pool_id:?}... ");
+        let mut pool_errors = Vec::new();
+        
+        for label in pool.labels {
+             match ensure_auth_present(accounts_root, &label) {
+                 Ok(_) => {}
+                 Err(e) => {
+                     pool_errors.push(format!("member {label:?}: {e}"));
+                 }
+             }
+        }
+        
+        if pool_errors.is_empty() {
+            println!("OK");
+        } else {
+            all_ok = false;
+            println!("FAIL");
+            for err in pool_errors {
+                println!("  - {err}");
+            }
+        }
+    }
+
+    if !all_ok {
+        anyhow::bail!("validation failed");
+    }
+    Ok(())
+}
+
 fn validate_pool_id(pool_id: &str) -> anyhow::Result<()> {
     if pool_id.is_empty() {
         anyhow::bail!("pool_id must not be empty");

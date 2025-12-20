@@ -39,13 +39,19 @@ pub(crate) async fn issue(
     json: bool,
 ) -> anyhow::Result<()> {
     let cfg = config::load(state_root)?;
-    let pool = cfg
-        .pools
-        .get(&pool_id)
-        .with_context(|| format!("pool {pool_id:?} does not exist"))?;
-    if pool.labels.is_empty() {
-        anyhow::bail!("pool {pool_id:?} has no labels configured");
-    }
+    
+    let policy_key = if pool_id == "default" {
+        None
+    } else {
+        let pool = cfg
+            .pools
+            .get(&pool_id)
+            .with_context(|| format!("pool {pool_id:?} does not exist"))?;
+        if pool.labels.is_empty() {
+            anyhow::bail!("pool {pool_id:?} has no labels configured");
+        }
+        pool.policy_key.clone()
+    };
 
     let ttl_seconds = ttl_seconds.unwrap_or(DEFAULT_SESSION_TTL_SECONDS);
     if ttl_seconds <= 0 {
@@ -58,7 +64,7 @@ pub(crate) async fn issue(
 
     let session = gateway_sessions::GatewaySession {
         account_pool_id: pool_id.clone(),
-        policy_key: pool.policy_key.clone(),
+        policy_key: policy_key.clone(),
         issued_at_ms: now_ms,
         expires_at_ms,
         note: note.clone(),
@@ -71,7 +77,7 @@ pub(crate) async fn issue(
         let out = GatewayIssueOut {
             token,
             pool_id,
-            policy_key: pool.policy_key.clone(),
+            policy_key: policy_key.clone(),
             expires_at_ms,
             ttl_seconds,
             note,

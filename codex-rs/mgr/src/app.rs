@@ -78,6 +78,9 @@ enum PoolsCommands {
     Set(PoolsSetArgs),
     List(PoolsListArgs),
     Del(PoolsDelArgs),
+    AddMember(PoolsAddMemberArgs),
+    RemoveMember(PoolsRemoveMemberArgs),
+    Validate(PoolsValidateArgs),
 }
 
 #[derive(Args, Debug)]
@@ -103,6 +106,24 @@ struct PoolsListArgs {
 #[derive(Args, Debug)]
 struct PoolsDelArgs {
     pool_id: String,
+}
+
+#[derive(Args, Debug)]
+struct PoolsAddMemberArgs {
+    pool_id: String,
+    label: String,
+}
+
+#[derive(Args, Debug)]
+struct PoolsRemoveMemberArgs {
+    pool_id: String,
+    label: String,
+}
+
+#[derive(Args, Debug)]
+struct PoolsValidateArgs {
+    /// Optional pool ID to validate specific pool. If unset, validates all.
+    pool_id: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -261,7 +282,7 @@ pub async fn run() -> anyhow::Result<()> {
             }
         },
         Commands::Pools(args) => match args.command {
-            PoolsCommands::Set(set) => {
+    PoolsCommands::Set(set) => {
                 pools::set(
                     &state_root,
                     &accounts_root,
@@ -273,6 +294,15 @@ pub async fn run() -> anyhow::Result<()> {
             }
             PoolsCommands::List(list) => pools::list(&state_root, list.json).await,
             PoolsCommands::Del(del) => pools::del(&state_root, del.pool_id).await,
+            PoolsCommands::AddMember(add) => {
+                pools::add_member(&state_root, &accounts_root, add.pool_id, add.label).await
+            }
+            PoolsCommands::RemoveMember(remove) => {
+                pools::remove_member(&state_root, remove.pool_id, remove.label).await
+            }
+            PoolsCommands::Validate(validate) => {
+                pools::validate(&state_root, &accounts_root, validate.pool_id).await
+            }
         },
         Commands::Gateway(args) => match args.command {
             GatewayCommands::Issue(issue) => {

@@ -8,7 +8,7 @@ const STICKY_KEY_PREFIX: &str = "gw:sticky:";
 #[derive(Debug, Clone)]
 pub(crate) struct RouteInfo {
     pub(crate) account_pool_id: String,
-    pub(crate) account_id: String,
+    pub(crate) candidates: Vec<String>,
     pub(crate) conversation_id: Option<String>,
 }
 
@@ -28,32 +28,47 @@ pub(crate) async fn route_account(
         anyhow::bail!("sticky_ttl_seconds must be > 0");
     }
 
-    let account_id = match conversation_id.as_deref() {
+    let candidates = match conversation_id.as_deref() {
         Some(conversation_id) => {
             let sticky_key = sticky_key(account_pool_id, conversation_id);
             let existing: Option<String> =
                 redis::cmd("GET").arg(&sticky_key).query_async(conn).await?;
             match existing {
-                Some(existing) if labels.iter().any(|l| l == &existing) => existing,
+                Some(existing) if labels.iter().any(|l| l == &existing) => {
+                    // Start with sticky, then append others in a deterministic order (relying on select_candidates logic)
+                    // but verifying the sticky one is first.
+                    // Actually, simpler: take sticky, append all other labels filtered.
+                    let mut list = Vec::with_capacity(labels.len());
+                    list.push(existing.clone());
+                    for label in labels {
+                        if label != &existing {
+                            list.push(label.clone());
+                        }
+                    }
+                    list
+                }
                 Some(_) => {
-                    let selected =
-                        select_account_id(account_pool_id, policy_key, conversation_id, labels)?;
+                    // Existing sticky is invalid (removed from pool), re-select
+                    let list =
+                        select_candidates(account_pool_id, policy_key, conversation_id, labels)?;
+                    let selected = &list[0];
                     let _: () = redis::cmd("SET")
                         .arg(&sticky_key)
-                        .arg(&selected)
+                        .arg(selected)
                         .arg("EX")
                         .arg(sticky_ttl_seconds)
                         .query_async(conn)
                         .await?;
-                    selected
+                    list
                 }
                 None => {
-                    let selected =
-                        select_account_id(account_pool_id, policy_key, conversation_id, labels)?;
+                    let list =
+                        select_candidates(account_pool_id, policy_key, conversation_id, labels)?;
+                    let selected = &list[0];
 
                     let set: Option<String> = redis::cmd("SET")
                         .arg(&sticky_key)
-                        .arg(&selected)
+                        .arg(selected)
                         .arg("NX")
                         .arg("EX")
                         .arg(sticky_ttl_seconds)
@@ -61,21 +76,34 @@ pub(crate) async fn route_account(
                         .await?;
 
                     if set.is_some() {
-                        selected
+                        list
                     } else {
+                        // Race condition: someone else set it. Read it back.
                         let current: Option<String> =
                             redis::cmd("GET").arg(&sticky_key).query_async(conn).await?;
-                        current.unwrap_or(selected)
+                         match current {
+                            Some(c) if labels.contains(&c) => {
+                                let mut list = Vec::with_capacity(labels.len());
+                                list.push(c.clone());
+                                for label in labels {
+                                    if label != &c {
+                                        list.push(label.clone());
+                                    }
+                                }
+                                list
+                            }
+                            _ => list, // Fallback to our selection if race result is weird
+                        }
                     }
                 }
             }
         }
-        None => select_account_id(account_pool_id, policy_key, non_sticky_key, labels)?,
+        None => select_candidates(account_pool_id, policy_key, non_sticky_key, labels)?,
     };
 
     Ok(RouteInfo {
         account_pool_id: account_pool_id.to_string(),
-        account_id,
+        candidates,
         conversation_id,
     })
 }
@@ -99,12 +127,12 @@ fn sticky_key(account_pool_id: &str, conversation_id: &str) -> String {
     format!("{STICKY_KEY_PREFIX}{account_pool_id}:{encoded}")
 }
 
-fn select_account_id(
+fn select_candidates(
     account_pool_id: &str,
     policy_key: Option<&str>,
     key: &str,
     labels: &[String],
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Vec<String>> {
     let mut hasher = sha2::Sha256::new();
     hasher.update(account_pool_id.as_bytes());
     hasher.update([0]);
@@ -115,7 +143,8 @@ fn select_account_id(
     hasher.update(key.as_bytes());
     let digest = hasher.finalize();
 
-    let len_i64 = i64::try_from(labels.len()).unwrap_or(i64::MAX);
+    let len = labels.len();
+    let len_i64 = i64::try_from(len).unwrap_or(i64::MAX);
     if len_i64 <= 0 {
         anyhow::bail!("labels must not be empty");
     }
@@ -125,7 +154,14 @@ fn select_account_id(
     let value = value.checked_abs().unwrap_or(i64::MAX);
     let idx_i64 = value.rem_euclid(len_i64);
     let idx_usize = usize::try_from(idx_i64).context("index does not fit in usize")?;
-    Ok(labels[idx_usize].clone())
+    
+    // Rotate labels so the selected one is first
+    let mut candidates = Vec::with_capacity(len);
+    for i in 0..len {
+        candidates.push(labels[(idx_usize + i) % len].clone());
+    }
+
+    Ok(candidates)
 }
 
 fn sha256_bytes(input: &[u8]) -> [u8; 32] {

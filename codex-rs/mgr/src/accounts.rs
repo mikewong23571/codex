@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::config;
 use crate::label::validate_label;
 use crate::layout::ensure_shared_layout;
 use crate::state::load_state;
@@ -62,12 +63,11 @@ pub(crate) async fn login(
         anyhow::bail!("login completed but auth.json is missing refresh_token for label {label}");
     }
 
-    let mut state = load_state(state_root).unwrap_or_default();
-    if !state.labels.iter().any(|l| l == &label) {
-        state.labels.push(label);
-        state.labels.sort();
-        save_state(state_root, &state).context("save state")?;
-    }
+    let state = load_state(state_root).unwrap_or_default();
+    // We only load/save state here to ensure the file is valid/initialized if needed,
+    // though strictly speaking we don't modify anything yet unless we add more metadata.
+    // For now, we just ensure it loads.
+    let _ = state;
 
     Ok(())
 }
@@ -192,6 +192,23 @@ pub(crate) async fn del(
     label: String,
 ) -> anyhow::Result<()> {
     validate_label(&label)?;
+
+    // Safety check: ensure account is not in any pool
+    if let Ok(root) = config::load_value_optional(state_root) {
+        if let Ok(pools) = config::extract_pools(&root) {
+             let mut in_pools = Vec::new();
+             for (pool_id, pool) in pools {
+                 if pool.labels.contains(&label) {
+                     in_pools.push(pool_id);
+                 }
+             }
+             if !in_pools.is_empty() {
+                 let pools_str = in_pools.join(", ");
+                 anyhow::bail!("cannot delete account {label:?} because it is a member of pool(s): {pools_str}");
+             }
+        }
+    }
+
     let account_home = accounts_root.join(&label);
     if !account_home.exists() {
         anyhow::bail!("label {label} does not exist");
@@ -201,7 +218,6 @@ pub(crate) async fn del(
     let _ = std::fs::remove_file(&auth_path);
 
     if let Ok(mut state) = load_state(state_root) {
-        state.labels.retain(|l| l != &label);
         state.usage_cache.remove(&label);
         let _ = save_state(state_root, &state);
     }

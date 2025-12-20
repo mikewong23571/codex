@@ -7,7 +7,6 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct ManagerState {
-    pub(crate) labels: Vec<String>,
     pub(crate) usage_cache: BTreeMap<String, CachedUsage>,
 }
 

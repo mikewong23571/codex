@@ -21,6 +21,7 @@ use std::time::Instant;
 use tokio::net::TcpListener;
 
 use crate::account_token_provider;
+use crate::accounts;
 use crate::config;
 use crate::gateway_sessions;
 use crate::observability;
@@ -153,41 +154,92 @@ async fn proxy_non_streaming(
     request: Request<Body>,
 ) -> Result<Response, StatusCode> {
     let mut conn = state.redis.clone();
-    let auth = account_token_provider::get(
-        &mut conn,
-        &state.accounts_root,
-        &route_info.account_id,
-        state.token_safety_window_seconds,
-    )
-    .await
-    .map_err(|err| {
-        if err.downcast_ref::<redis::RedisError>().is_some() {
-            tracing::error!(error = %err, "redis error in account token provider");
-            state
-                .metrics
-                .redis_errors_total
-                .fetch_add(1, Ordering::Relaxed);
-            return StatusCode::SERVICE_UNAVAILABLE;
+    
+    // We need to clone the request body if we want to retry, but Body is a stream.
+    // For now, we only support retrying if the request body is buffered or replayable.
+    // Actually, axum Request with Body is single-use stream usually.
+    // To support true retries of POST requests, we'd need to buffer the body.
+    // Given MAX_BODY_BYTES is 10MB, buffering is feasible.
+    // However, `proxy::forward` takes `request` and consumes it.
+    // We need to buffer the request body first.
+    
+    let (parts, body) = request.into_parts();
+    let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    for (i, account_id) in route_info.candidates.iter().enumerate() {
+        let is_last = i == route_info.candidates.len() - 1;
+
+        let auth_result = account_token_provider::get(
+            &mut conn,
+            &state.accounts_root,
+            account_id,
+            state.token_safety_window_seconds,
+        )
+        .await;
+
+        let auth = match auth_result {
+            Ok(a) => a,
+            Err(err) => {
+                if err.downcast_ref::<redis::RedisError>().is_some() {
+                     // Redis errors are likely global/systemic, so retrying another account might not help 
+                     // unless it's a specific key issue. But let's log and maybe fail fast?
+                     // Actually, account_token_provider uses redis for caching.
+                     tracing::error!(error = %err, "redis error in account token provider");
+                } else {
+                     tracing::warn!(error = %err, %account_id, "token provider error");
+                }
+                
+                if is_last {
+                     return Err(StatusCode::BAD_GATEWAY);
+                }
+                continue; 
+            }
+        };
+
+        // Reconstruct request for this attempt
+        let req = Request::from_parts(parts.clone(), Body::from(body_bytes.clone()));
+        
+        // Update trace data with the account we are actually trying
+        if let Some(trace_data) = req.extensions().get::<Arc<RequestTraceData>>() {
+            // we can only set once, so this is imperfect for retries. 
+            // We'll set it on the first attempt only, or we accept it's just the first one.
+            let _ = trace_data.account_id.set(account_id.clone());
         }
 
-        tracing::warn!(error = %err, account_id = %route_info.account_id, "token provider error");
-        state
-            .metrics
-            .token_errors_total
-            .fetch_add(1, Ordering::Relaxed);
-        StatusCode::BAD_GATEWAY
-    })?;
+        let result = proxy::forward(
+            &state.http,
+            &state.upstream_base_url,
+            req,
+            &auth.authorization,
+            auth.chatgpt_account_id.as_deref(),
+            Arc::clone(&state.metrics),
+            state.debug,
+        )
+        .await;
 
-    proxy::forward(
-        &state.http,
-        &state.upstream_base_url,
-        request,
-        &auth.authorization,
-        auth.chatgpt_account_id.as_deref(),
-        Arc::clone(&state.metrics),
-        state.debug,
-    )
-    .await
+        match result {
+            Ok(response) => {
+                let status = response.status();
+                if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                     tracing::warn!(%status, %account_id, "upstream error, retrying with next candidate if available");
+                     if is_last {
+                         return Ok(response);
+                     }
+                     continue;
+                }
+                return Ok(response);
+            }
+            Err(status) => {
+                 tracing::warn!(%status, %account_id, "upstream connection failed");
+                 if is_last {
+                     return Err(status);
+                 }
+            }
+        }
+    }
+
+    // Should be unreachable if candidates is not empty (checked in routing)
+    Err(StatusCode::BAD_GATEWAY)
 }
 
 async fn ensure_routing(
@@ -205,10 +257,19 @@ async fn ensure_routing(
         .cloned()
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let pool = state
-        .pools
-        .get(&session.account_pool_id)
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (labels, policy_key) = if session.account_pool_id == "default" {
+        let labels = accounts::list_labels(&state.accounts_root).map_err(|e| {
+            tracing::error!(error = %e, "failed to list accounts for default pool");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        (labels, None)
+    } else {
+        let pool = state
+            .pools
+            .get(&session.account_pool_id)
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        (pool.labels.clone(), pool.policy_key.clone())
+    };
 
     let conversation_id = routing::extract_conversation_id(request.headers());
     let path_and_query = request
@@ -223,8 +284,8 @@ async fn ensure_routing(
     let route_info = routing::route_account(
         &mut conn,
         &session.account_pool_id,
-        &pool.labels,
-        session.policy_key.as_deref(),
+        &labels,
+        policy_key.as_deref(),
         state.sticky_ttl_seconds,
         conversation_id,
         &non_sticky_key,
@@ -248,9 +309,7 @@ async fn ensure_routing(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    if let Some(trace_data) = request.extensions().get::<Arc<RequestTraceData>>() {
-        let _ = trace_data.account_id.set(route_info.account_id.clone());
-    }
+    // Removed setting trace_data.account_id here because it's set in proxy_non_streaming
 
     request.extensions_mut().insert(route_info);
     Ok(next.run(request).await)
@@ -259,8 +318,8 @@ async fn ensure_routing(
 async fn authz(Extension(route_info): Extension<routing::RouteInfo>) -> String {
     let conversation_id = route_info.conversation_id.as_deref().unwrap_or("-");
     let pool_id = &route_info.account_pool_id;
-    let account_id = &route_info.account_id;
-    format!("ok\npool: {pool_id}\naccount: {account_id}\nconversation_id: {conversation_id}\n")
+    let candidates = route_info.candidates.join(",");
+    format!("ok\npool: {pool_id}\ncandidates: {candidates}\nconversation_id: {conversation_id}\n")
 }
 
 fn parse_bearer_token(value: &str) -> Option<&str> {
