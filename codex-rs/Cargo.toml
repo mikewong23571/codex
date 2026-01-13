@@ -25,6 +25,7 @@ members = [
     "linux-sandbox",
     "lmstudio",
     "login",
+    "mgr",
     "mcp-server",
     "mcp-types",
     "ollama",
@@ -180,6 +181,7 @@ rand = "0.9"
 ratatui = "0.29.0"
 ratatui-core = "0.1.0"
 ratatui-macros = "0.6.0"
+redis = { version = "1.0.1", default-features = false, features = ["connection-manager", "tokio-comp"] }
 regex = "1.12.2"
 regex-lite = "0.1.8"
 reqwest = "0.12"
