@@ -1,0 +1,39 @@
+name: Build codex-mgr
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build codex-mgr
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools pkg-config
+
+      - name: Build codex-mgr
+        run: cargo build --release --bin codex-mgr --target x86_64-unknown-linux-musl
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-mgr-linux-x86_64-musl
+          path: codex-rs/target/x86_64-unknown-linux-musl/release/codex-mgr
