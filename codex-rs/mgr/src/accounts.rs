@@ -31,6 +31,7 @@ pub(crate) async fn login(
     accounts_root: &Path,
     state_root: &Path,
     label: String,
+    device_auth: bool,
 ) -> anyhow::Result<()> {
     validate_label(&label)?;
     let account_home = accounts_root.join(&label);
@@ -41,11 +42,14 @@ pub(crate) async fn login(
     ensure_shared_layout(&account_home, shared_root).context("ensure shared layout")?;
 
     let codex = upstream::resolve_codex_binary(codex_path);
-    let status = Command::new(codex)
-        .arg("login")
-        .env("CODEX_HOME", &account_home)
-        .status()
-        .context("spawning upstream codex login")?;
+    let mut cmd = Command::new(codex);
+    cmd.arg("login").env("CODEX_HOME", &account_home);
+
+    if device_auth {
+        cmd.arg("--device-auth");
+    }
+
+    let status = cmd.status().context("spawning upstream codex login")?;
     if !status.success() {
         anyhow::bail!("upstream codex login failed for label {label}");
     }
