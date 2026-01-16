@@ -32,3 +32,7 @@ tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sig
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
