@@ -53,6 +53,10 @@ struct LoginArgs {
     /// Local label for this account (unique).
     #[arg(long)]
     label: String,
+
+    /// Use device code authentication (for headless environments).
+    #[arg(long)]
+    device_auth: bool,
 }
 
 #[derive(Args, Debug)]
@@ -270,6 +274,7 @@ pub async fn run() -> anyhow::Result<()> {
                 &accounts_root,
                 &state_root,
                 args.label,
+                args.device_auth,
             )
             .await
         }
