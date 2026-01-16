@@ -216,12 +216,25 @@ pub(crate) async fn del(
     }
 
     let account_home = accounts_root.join(&label);
-    if !account_home.exists() {
-        anyhow::bail!("label {label} does not exist");
+    let metadata = match std::fs::symlink_metadata(&account_home) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!("label {label} does not exist");
+        }
+        Err(err) => return Err(err).with_context(|| format!("stat {account_home:?}")),
+    };
+
+    if metadata.file_type().is_symlink() {
+        anyhow::bail!("refusing to delete symlinked account home {account_home:?}");
+    }
+    if !metadata.is_dir() {
+        anyhow::bail!("refusing to delete non-directory account home {account_home:?}");
     }
 
     let auth_path = account_home.join("auth.json");
     let _ = std::fs::remove_file(&auth_path);
+    std::fs::remove_dir_all(&account_home)
+        .with_context(|| format!("removing account home {account_home:?}"))?;
 
     if let Ok(mut state) = load_state(state_root) {
         state.usage_cache.remove(&label);
@@ -253,4 +266,48 @@ fn read_auth_dot_json(path: &Path) -> anyhow::Result<Option<AuthDotJson>> {
         Err(err) => return Err(err.into()),
     };
     Ok(Some(serde_json::from_str(&contents)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
+
+    #[tokio::test]
+    async fn del_removes_account_home_and_usage_cache() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let accounts_root = temp.path().join("accounts");
+        let state_root = temp.path().join("state");
+        std::fs::create_dir_all(&accounts_root).expect("create accounts root");
+        std::fs::create_dir_all(&state_root).expect("create state root");
+
+        let label = "demo-account".to_string();
+        let account_home = accounts_root.join(&label);
+        std::fs::create_dir_all(&account_home).expect("create account home");
+        std::fs::write(account_home.join("auth.json"), "{}").expect("write auth.json");
+        std::fs::write(account_home.join("extra.txt"), "data").expect("write extra file");
+
+        let mut usage_cache = BTreeMap::new();
+        usage_cache.insert(
+            label.clone(),
+            crate::state::CachedUsage {
+                captured_at_ms: 0,
+                snapshot: crate::state::UsageSnapshot {
+                    five_hour: None,
+                    weekly: None,
+                },
+            },
+        );
+        crate::state::save_state(&state_root, &crate::state::ManagerState { usage_cache })
+            .expect("save state");
+
+        del(&accounts_root, &state_root, label.clone())
+            .await
+            .expect("delete account");
+
+        assert_eq!(account_home.exists(), false);
+        let state = crate::state::load_state(&state_root).expect("load state");
+        assert_eq!(state, crate::state::ManagerState::default());
+    }
 }

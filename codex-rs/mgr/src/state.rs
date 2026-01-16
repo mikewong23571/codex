@@ -5,24 +5,24 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub(crate) struct ManagerState {
     pub(crate) usage_cache: BTreeMap<String, CachedUsage>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct CachedUsage {
     pub(crate) captured_at_ms: i64,
     pub(crate) snapshot: UsageSnapshot,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct UsageSnapshot {
     pub(crate) five_hour: Option<WindowSnapshot>,
     pub(crate) weekly: Option<WindowSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct WindowSnapshot {
     pub(crate) used_percent: f64,
     pub(crate) remaining_percent: f64,
