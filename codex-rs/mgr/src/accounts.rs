@@ -5,9 +5,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::account_token_provider;
 use crate::config;
 use crate::label::validate_label;
 use crate::layout::ensure_shared_layout;
+use crate::redis_conn;
 use crate::state::load_state;
 use crate::state::save_state;
 use crate::time::now_ms;
@@ -32,11 +34,33 @@ pub(crate) async fn login(
     state_root: &Path,
     label: String,
     device_auth: bool,
+    force: bool,
 ) -> anyhow::Result<()> {
     validate_label(&label)?;
     let account_home = accounts_root.join(&label);
-    if account_home.exists() {
+    if account_home.exists() && !force {
         anyhow::bail!("label {label} already exists");
+    }
+
+    if account_home.exists() {
+        let metadata = std::fs::symlink_metadata(&account_home)
+            .with_context(|| format!("stat {account_home:?}"))?;
+        if metadata.file_type().is_symlink() {
+            anyhow::bail!("refusing to delete symlinked account home {account_home:?}");
+        }
+        if !metadata.is_dir() {
+            anyhow::bail!("refusing to delete non-directory account home {account_home:?}");
+        }
+
+        let auth_path = account_home.join("auth.json");
+        let _ = std::fs::remove_file(&auth_path);
+        std::fs::remove_dir_all(&account_home)
+            .with_context(|| format!("removing account home {account_home:?}"))?;
+
+        if let Ok(mut state) = load_state(state_root) {
+            state.usage_cache.remove(&label);
+            let _ = save_state(state_root, &state);
+        }
     }
     std::fs::create_dir_all(&account_home).context("create account home")?;
     ensure_shared_layout(&account_home, shared_root).context("ensure shared layout")?;
@@ -65,6 +89,26 @@ pub(crate) async fn login(
         .is_some_and(|t| !t.refresh_token.trim().is_empty());
     if !refresh_ok {
         anyhow::bail!("login completed but auth.json is missing refresh_token for label {label}");
+    }
+
+    if let Ok(cfg) = config::load(state_root) {
+        match redis_conn::connect(&cfg.gateway.redis_url).await {
+            Ok(mut conn) => {
+                if let Err(err) = account_token_provider::invalidate_cached(&mut conn, &label).await
+                {
+                    tracing::warn!(
+                        error = %err,
+                        "failed to invalidate cached account token after login"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "failed to connect to redis to invalidate cached account token after login"
+                );
+            }
+        }
     }
 
     let state = load_state(state_root).unwrap_or_default();

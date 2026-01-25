@@ -9,7 +9,7 @@ use crate::gateway_sessions;
 use crate::redis_conn;
 use crate::time::now_ms;
 
-const DEFAULT_SESSION_TTL_SECONDS: i64 = 86_400;
+const DEFAULT_SESSION_TTL_SECONDS: i64 = 31_536_000;
 
 #[derive(Debug, Clone, Serialize)]
 struct GatewaySessionRow {

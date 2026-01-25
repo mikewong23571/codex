@@ -57,6 +57,10 @@ struct LoginArgs {
     /// Use device code authentication (for headless environments).
     #[arg(long)]
     device_auth: bool,
+
+    /// Re-login with an existing label by removing the current account home first.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Args, Debug)]
@@ -149,7 +153,7 @@ struct GatewayIssueArgs {
     #[arg(long)]
     pool: String,
 
-    /// TTL for this gateway token session (default: 86400).
+    /// TTL for this gateway token session (default: 31536000).
     #[arg(long)]
     ttl_seconds: Option<i64>,
 
@@ -275,6 +279,7 @@ pub async fn run() -> anyhow::Result<()> {
                 &state_root,
                 args.label,
                 args.device_auth,
+                args.force,
             )
             .await
         }

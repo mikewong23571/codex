@@ -82,6 +82,15 @@ pub(crate) async fn get(
     Ok(material)
 }
 
+pub(crate) async fn invalidate_cached(
+    conn: &mut redis::aio::ConnectionManager,
+    account_id: &str,
+) -> anyhow::Result<bool> {
+    let key = format!("{TOKEN_CACHE_KEY_PREFIX}{account_id}");
+    let removed: i64 = redis::cmd("DEL").arg(&key).query_async(conn).await?;
+    Ok(removed > 0)
+}
+
 async fn get_cached(
     conn: &mut redis::aio::ConnectionManager,
     account_id: &str,
