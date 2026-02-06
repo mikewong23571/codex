@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -z "${CODEX_SHIM_REAL_CODEX:-}" ]]; then
+  echo "ERROR: CODEX_SHIM_REAL_CODEX is not set (path to the real upstream 'codex' binary)." >&2
+  echo "Example: CODEX_SHIM_REAL_CODEX=\"$(command -v codex)\" codex" >&2
+  exit 2
+fi
+
+if [[ ! -x "${CODEX_SHIM_REAL_CODEX}" ]]; then
+  echo "ERROR: CODEX_SHIM_REAL_CODEX is not executable: ${CODEX_SHIM_REAL_CODEX}" >&2
+  exit 2
+fi
+
+exec codex-mgr --codex-path "${CODEX_SHIM_REAL_CODEX}" run --auto -- "$@"

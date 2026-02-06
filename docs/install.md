@@ -49,6 +49,22 @@ just test
 cargo test --all-features
 ```
 
+### Building codex-mgr (musl)
+
+If you want to build `codex-mgr` as a MUSL-linked Linux binary, install the MUSL build tools and add the Rust target:
+
+```bash
+cd codex/codex-rs
+rustup target add x86_64-unknown-linux-musl
+sudo apt-get update
+sudo apt-get install -y musl-tools pkg-config g++ clang lld
+
+cargo build --release -p codex-mgr --bin codex-mgr --target x86_64-unknown-linux-musl
+./target/x86_64-unknown-linux-musl/release/codex-mgr --help
+```
+
+The GitHub Actions workflow uses `.github/scripts/install-musl-build-tools.sh` as a reference for system dependencies.
+
 ## Tracing / verbose logging
 
 Codex is written in Rust, so it honors the `RUST_LOG` environment variable to configure its logging behavior.
