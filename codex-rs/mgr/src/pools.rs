@@ -1,5 +1,5 @@
 use anyhow::Context;
-use codex_core::auth::AuthDotJson;
+use codex_login::AuthDotJson;
 use serde::Serialize;
 use std::path::Path;
 

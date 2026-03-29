@@ -1,7 +1,7 @@
 use anyhow::Context;
 use base64::Engine;
-use codex_core::AuthManager;
-use codex_core::auth::AuthCredentialsStoreMode;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthManager;
 use rand::TryRngCore;
 use serde::Deserialize;
 use serde::Serialize;

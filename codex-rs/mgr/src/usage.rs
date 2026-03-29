@@ -1,8 +1,8 @@
 use anyhow::Context;
 use codex_backend_client::Client as BackendClient;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
-use codex_core::auth::AuthCredentialsStoreMode;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use futures::StreamExt;

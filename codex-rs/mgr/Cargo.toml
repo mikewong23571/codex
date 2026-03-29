@@ -18,7 +18,7 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 codex-backend-client = { workspace = true }
-codex-core = { workspace = true }
+codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }

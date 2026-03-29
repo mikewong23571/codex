@@ -2372,7 +2372,7 @@ dependencies = [
  "bytes",
  "clap",
  "codex-backend-client",
- "codex-core",
+ "codex-login",
  "codex-protocol",
  "dirs",
  "futures",
