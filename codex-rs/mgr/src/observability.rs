@@ -62,6 +62,11 @@ pub(crate) struct GatewayMetrics {
     pub(crate) upstream_latency_ms_count: AtomicI64,
     pub(crate) sse_streams_inflight: AtomicI64,
     pub(crate) sse_streams_total: AtomicI64,
+    pub(crate) websocket_connections_total: AtomicI64,
+    pub(crate) websocket_connections_inflight: AtomicI64,
+    pub(crate) websocket_connect_failures_total: AtomicI64,
+    pub(crate) websocket_upstream_handshake_failures_total: AtomicI64,
+    pub(crate) websocket_relay_errors_total: AtomicI64,
     pub(crate) request_duration_ms_sum: AtomicI64,
     pub(crate) request_duration_ms_count: AtomicI64,
 }
@@ -89,6 +94,17 @@ impl GatewayMetrics {
         let upstream_latency_ms_count = self.upstream_latency_ms_count.load(Ordering::Relaxed);
         let sse_streams_inflight = self.sse_streams_inflight.load(Ordering::Relaxed);
         let sse_streams_total = self.sse_streams_total.load(Ordering::Relaxed);
+        let websocket_connections_total = self.websocket_connections_total.load(Ordering::Relaxed);
+        let websocket_connections_inflight =
+            self.websocket_connections_inflight.load(Ordering::Relaxed);
+        let websocket_connect_failures_total = self
+            .websocket_connect_failures_total
+            .load(Ordering::Relaxed);
+        let websocket_upstream_handshake_failures_total = self
+            .websocket_upstream_handshake_failures_total
+            .load(Ordering::Relaxed);
+        let websocket_relay_errors_total =
+            self.websocket_relay_errors_total.load(Ordering::Relaxed);
         let request_duration_ms_sum = self.request_duration_ms_sum.load(Ordering::Relaxed);
         let request_duration_ms_count = self.request_duration_ms_count.load(Ordering::Relaxed);
 
@@ -145,6 +161,21 @@ codex_mgr_gateway_sse_streams_inflight {sse_streams_inflight}\n\
 # HELP codex_mgr_gateway_sse_streams_total Total SSE streams started.\n\
 # TYPE codex_mgr_gateway_sse_streams_total counter\n\
 codex_mgr_gateway_sse_streams_total {sse_streams_total}\n\
+# HELP codex_mgr_gateway_websocket_connections_total Total websocket relay sessions started.\n\
+# TYPE codex_mgr_gateway_websocket_connections_total counter\n\
+codex_mgr_gateway_websocket_connections_total {websocket_connections_total}\n\
+# HELP codex_mgr_gateway_websocket_connections_inflight Current websocket relay sessions in flight.\n\
+# TYPE codex_mgr_gateway_websocket_connections_inflight gauge\n\
+codex_mgr_gateway_websocket_connections_inflight {websocket_connections_inflight}\n\
+# HELP codex_mgr_gateway_websocket_connect_failures_total Upstream websocket connect attempts that failed.\n\
+# TYPE codex_mgr_gateway_websocket_connect_failures_total counter\n\
+codex_mgr_gateway_websocket_connect_failures_total {websocket_connect_failures_total}\n\
+# HELP codex_mgr_gateway_websocket_upstream_handshake_failures_total Upstream websocket handshake failures.\n\
+# TYPE codex_mgr_gateway_websocket_upstream_handshake_failures_total counter\n\
+codex_mgr_gateway_websocket_upstream_handshake_failures_total {websocket_upstream_handshake_failures_total}\n\
+# HELP codex_mgr_gateway_websocket_relay_errors_total Websocket relay loop errors.\n\
+# TYPE codex_mgr_gateway_websocket_relay_errors_total counter\n\
+codex_mgr_gateway_websocket_relay_errors_total {websocket_relay_errors_total}\n\
 # HELP codex_mgr_gateway_request_duration_ms_sum Request duration sum in ms (time-to-headers).\n\
 # TYPE codex_mgr_gateway_request_duration_ms_sum counter\n\
 codex_mgr_gateway_request_duration_ms_sum {request_duration_ms_sum}\n\
@@ -153,5 +184,21 @@ codex_mgr_gateway_request_duration_ms_sum {request_duration_ms_sum}\n\
 codex_mgr_gateway_request_duration_ms_count {request_duration_ms_count}\n\
 "
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prometheus_output_includes_websocket_metrics() {
+        let rendered = GatewayMetrics::default().render_prometheus();
+
+        assert!(rendered.contains("codex_mgr_gateway_websocket_connections_total"));
+        assert!(rendered.contains("codex_mgr_gateway_websocket_connections_inflight"));
+        assert!(rendered.contains("codex_mgr_gateway_websocket_connect_failures_total"));
+        assert!(rendered.contains("codex_mgr_gateway_websocket_upstream_handshake_failures_total"));
+        assert!(rendered.contains("codex_mgr_gateway_websocket_relay_errors_total"));
     }
 }

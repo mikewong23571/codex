@@ -8,6 +8,7 @@ use std::process::Command;
 use crate::account_token_provider;
 use crate::config;
 use crate::label::validate_label;
+use crate::layout::ensure_shared_config;
 use crate::layout::ensure_shared_layout;
 use crate::redis_conn;
 use crate::state::load_state;
@@ -63,6 +64,7 @@ pub(crate) async fn login(
         }
     }
     std::fs::create_dir_all(&account_home).context("create account home")?;
+    ensure_shared_config(shared_root).context("ensure shared config")?;
     ensure_shared_layout(&account_home, shared_root).context("ensure shared layout")?;
 
     let codex = upstream::resolve_codex_binary(codex_path);

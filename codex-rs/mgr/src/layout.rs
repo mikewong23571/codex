@@ -7,14 +7,16 @@ use std::os::unix::fs as unix_fs;
 pub(crate) fn ensure_shared_layout(account_home: &Path, shared_root: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
-        let entries: [(&str, bool); 10] = [
+        let entries: [(&str, bool); 12] = [
             ("config.toml", false),
             ("managed_config.toml", false),
             ("history.jsonl", false),
             ("prompts", true),
             ("log", true),
+            ("memories", true),
             ("sessions", true),
             ("archived_sessions", true),
+            ("skills", true),
             ("models_cache.json", false),
             (".credentials.json", false),
             ("version.json", false),
@@ -136,6 +138,16 @@ pub(crate) fn ensure_shared_config(shared_root: &Path) -> anyhow::Result<()> {
         let table = root
             .as_table_mut()
             .context("shared config root is not a table")?;
+        let auth_store_changed = !matches!(
+            table
+                .get("cli_auth_credentials_store")
+                .and_then(toml::Value::as_str),
+            Some("file")
+        );
+        table.insert(
+            "cli_auth_credentials_store".to_string(),
+            toml::Value::String("file".to_string()),
+        );
         let projects_entry = table
             .entry("projects")
             .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
@@ -144,7 +156,7 @@ pub(crate) fn ensure_shared_config(shared_root: &Path) -> anyhow::Result<()> {
             .context("shared config projects is not a table")?;
 
         let key = cwd.to_string_lossy().to_string();
-        if projects.contains_key(&key) {
+        if projects.contains_key(&key) && !auth_store_changed {
             return Ok(());
         }
 
@@ -196,4 +208,64 @@ pub(crate) fn ensure_shared_config(shared_root: &Path) -> anyhow::Result<()> {
     }
 
     anyhow::bail!("failed to update shared config due to concurrent modifications");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn ensure_shared_config_forces_file_auth_storage() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let shared_root = temp.path().join("shared");
+        std::fs::create_dir_all(&shared_root).expect("create shared root");
+
+        std::fs::write(
+            shared_root.join("config.toml"),
+            "cli_auth_credentials_store = \"keyring\"\n",
+        )
+        .expect("write config");
+
+        ensure_shared_config(&shared_root).expect("ensure shared config");
+
+        let config =
+            std::fs::read_to_string(shared_root.join("config.toml")).expect("read shared config");
+        let parsed: toml::Value = toml::from_str(&config).expect("parse shared config");
+        assert_eq!(
+            parsed
+                .get("cli_auth_credentials_store")
+                .and_then(toml::Value::as_str),
+            Some("file")
+        );
+    }
+
+    #[test]
+    fn ensure_shared_config_updates_auth_storage_even_when_project_exists() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let shared_root = temp.path().join("shared");
+        std::fs::create_dir_all(&shared_root).expect("create shared root");
+
+        let cwd = std::env::current_dir().expect("current dir");
+        let cwd = cwd.to_string_lossy();
+        std::fs::write(
+            shared_root.join("config.toml"),
+            format!(
+                "cli_auth_credentials_store = \"keyring\"\n\n[projects.\"{cwd}\"]\ntrust_level = \"trusted\"\n"
+            ),
+        )
+        .expect("write config");
+
+        ensure_shared_config(&shared_root).expect("ensure shared config");
+
+        let config =
+            std::fs::read_to_string(shared_root.join("config.toml")).expect("read shared config");
+        let parsed: toml::Value = toml::from_str(&config).expect("parse shared config");
+        assert_eq!(
+            parsed
+                .get("cli_auth_credentials_store")
+                .and_then(toml::Value::as_str),
+            Some("file")
+        );
+    }
 }

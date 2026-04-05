@@ -3,6 +3,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::Extension;
 use axum::extract::State;
+use axum::extract::ws::WebSocketUpgrade;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::header;
@@ -10,6 +11,7 @@ use axum::http::header::HeaderValue;
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::Response;
+use axum::routing::any;
 use axum::routing::get;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -31,23 +33,25 @@ use crate::proxy;
 use crate::redis_conn;
 use crate::routing;
 use crate::usage;
+use crate::websocket_proxy;
 
 #[derive(Clone)]
-struct ServeState {
-    redis: redis::aio::ConnectionManager,
-    upstream_base_url: String,
-    http: reqwest::Client,
-    pools: BTreeMap<String, config::PoolConfig>,
-    sticky_ttl_seconds: i64,
-    accounts_root: PathBuf,
-    token_safety_window_seconds: i64,
-    metrics: Arc<observability::GatewayMetrics>,
-    usage_scores: Arc<RwLock<HashMap<String, usage::Score>>>,
-    debug: bool,
+pub(crate) struct ServeState {
+    pub(crate) redis: redis::aio::ConnectionManager,
+    pub(crate) upstream_base_url: String,
+    pub(crate) http: reqwest::Client,
+    pub(crate) pools: BTreeMap<String, config::PoolConfig>,
+    pub(crate) sticky_ttl_seconds: i64,
+    pub(crate) accounts_root: PathBuf,
+    pub(crate) token_safety_window_seconds: i64,
+    pub(crate) metrics: Arc<observability::GatewayMetrics>,
+    pub(crate) usage_scores: Arc<RwLock<HashMap<String, usage::Score>>>,
+    pub(crate) debug: bool,
 }
 
 pub(crate) async fn run(
     state_root: &Path,
+    shared_root: &Path,
     accounts_root: &Path,
     debug: bool,
 ) -> anyhow::Result<()> {
@@ -75,7 +79,7 @@ pub(crate) async fn run(
     let gateway_metrics = Arc::new(observability::GatewayMetrics::default());
     let state_root_clone = state_root.to_path_buf();
     let accounts_root_clone = accounts_root.to_path_buf();
-    let shared_root = state_root.join("shared");
+    let shared_root = shared_root.to_path_buf();
 
     // SSE Optimization:
     // 1. tcp_keepalive: Prevent middleboxes (NAT/LB) from dropping idle TCP connections.
@@ -140,6 +144,8 @@ pub(crate) async fn run(
         .route("/readyz", get(readyz_handler))
         .route("/metrics", get(metrics_handler))
         .route("/authz", get(authz))
+        .route("/responses", any(responses_entry))
+        .route("/ws", any(websocket_entry))
         .fallback(proxy_non_streaming)
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -301,6 +307,32 @@ async fn proxy_non_streaming(
     Err(StatusCode::BAD_GATEWAY)
 }
 
+async fn responses_entry(
+    State(state): State<Arc<ServeState>>,
+    Extension(route_info): Extension<routing::RouteInfo>,
+    websocket: Result<WebSocketUpgrade, axum::extract::ws::rejection::WebSocketUpgradeRejection>,
+    request: Request<Body>,
+) -> Result<Response, StatusCode> {
+    if websocket_proxy::is_websocket_upgrade(request.headers()) {
+        let websocket = websocket.map_err(|err| {
+            tracing::warn!(error = %err, "invalid websocket upgrade request for /responses");
+            StatusCode::BAD_REQUEST
+        })?;
+        return websocket_proxy::forward(state, route_info, websocket, request).await;
+    }
+
+    proxy_non_streaming(State(state), Extension(route_info), request).await
+}
+
+async fn websocket_entry(
+    State(state): State<Arc<ServeState>>,
+    Extension(route_info): Extension<routing::RouteInfo>,
+    websocket: WebSocketUpgrade,
+    request: Request<Body>,
+) -> Result<Response, StatusCode> {
+    websocket_proxy::forward(state, route_info, websocket, request).await
+}
+
 async fn ensure_routing(
     State(state): State<Arc<ServeState>>,
     mut request: Request<Body>,
@@ -427,11 +459,11 @@ fn warn_if_upstream_base_url_is_suspicious(upstream_base_url: &str) {
 }
 
 #[derive(Debug)]
-struct RequestTraceData {
-    request_id: String,
-    conversation_hash: Option<String>,
-    pool_id: OnceLock<String>,
-    account_id: OnceLock<String>,
+pub(crate) struct RequestTraceData {
+    pub(crate) request_id: String,
+    pub(crate) conversation_hash: Option<String>,
+    pub(crate) pool_id: OnceLock<String>,
+    pub(crate) account_id: OnceLock<String>,
 }
 
 async fn with_request_context(
