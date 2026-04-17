@@ -42,6 +42,7 @@ members = [
     "linux-sandbox",
     "lmstudio",
     "login",
+    "mgr",
     "codex-mcp",
     "mcp-server",
     "model-provider-info",
